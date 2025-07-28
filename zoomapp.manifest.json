@@ -1,0 +1,53 @@
+{
+  "app_name": "My Zoom App",
+  "short_description": "A simple app to demonstrate Zoom App functionality.",
+  "long_description": "This app runs inside the Zoom meeting client as a video overlay, configured for testing and development. It displays meeting participants and their status.",
+  "version": "1.0.0",
+  "app_type": "in-client",
+  "domains": [
+    "unduly-notable-llama.ngrok-free.app",
+    "appssdk.zoom.us"
+  ],
+  "redirect_urls": [
+    "https://unduly-notable-llama.ngrok-free.app/auth"
+  ],
+  "home_url": "https://unduly-notable-llama.ngrok-free.app",
+  "scopes": [
+    "zoomapp:inmeeting",
+    "meeting:read",
+    "user:read"
+  ],
+  "apis": [
+    "getMeetingParticipants",
+    "getRunningContext",
+    "getMeetingContext",
+    "getUserContext",
+    "runRenderingContext",
+    "openUrl",
+    "drawWebView",
+    "getMeetingUUID",
+    "postMessage",
+    "onMeeting",
+    "onMyUserContextChange",
+    "onMessage",
+    "showNotification"
+  ],
+  "events": [
+    "onMeeting",
+    "onMyUserContextChange", 
+    "onMessage",
+    "onConnect",
+    "onAuthorized"
+  ],
+  "in_client": {
+    "immersive": {
+      "html_path": "/",
+      "is_immersible": true
+    }
+  },
+  "features": {
+    "guest_mode": true,
+    "in_client_oauth": true,
+    "collaborate_mode": true
+  }
+}
