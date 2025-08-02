@@ -17,12 +17,12 @@ export const zoomApp = {
   // Required capabilities that match your manifest APIs
   capabilities: [
     'getMeetingParticipants',
-    'getRunningContext', 
+    'getRunningContext',
     'getMeetingContext',
     'getUserContext',
     'runRenderingContext',
     'openUrl',
-    'drawWebView', 
+    'drawWebView',
     'getMeetingUUID',
     'postMessage',
     'onMeeting',
@@ -46,6 +46,22 @@ export const zoomApp = {
 };
 
 export const redirectUri = zoomApp.redirectUrl;
+
+// WebSocket Configuration
+export const websocket = {
+  // Maximum number of scores to store per room
+  maxScoresPerRoom: 100,
+  
+  // Room cleanup interval (in milliseconds)
+  roomCleanupInterval: 5 * 60 * 1000, // 5 minutes
+  
+  // Score sharing settings
+  scoreSharing: {
+    enableHistory: true,
+    enableNotifications: true,
+    maxParticipantsPerRoom: 500
+  }
+};
 
 // Environment validation
 export function validateConfig() {
