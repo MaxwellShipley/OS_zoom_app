@@ -17,9 +17,9 @@ const io = new Server(server, {
 const port = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Store room participants and scores
-const rooms = new Map();
-const roomScores = new Map();
+// Store room participants and latest scores only
+const rooms = new Map(); // roomId -> [{socketId, userId, userName, joinedAt}]
+const roomScores = new Map(); // roomId -> {userId: latestScoreData}
 
 // Set security headers required by Zoom (OWASP compliance)
 app.use((req, res, next) => {
@@ -124,16 +124,18 @@ io.on('connection', (socket) => {
     // Join the new room
     socket.join(roomId);
     
-    // Track participants in room
+    // Initialize room data structures if needed
     if (!rooms.has(roomId)) {
       rooms.set(roomId, []);
-      roomScores.set(roomId, []);
+      roomScores.set(roomId, {});
     }
     
     const roomParticipants = rooms.get(roomId);
+    const roomScoreData = roomScores.get(roomId);
     const existingParticipant = roomParticipants.find(p => p.userId === userId);
     
     if (!existingParticipant) {
+      // Add new participant
       roomParticipants.push({
         socketId: socket.id,
         userId,
@@ -141,22 +143,31 @@ io.on('connection', (socket) => {
         joinedAt: new Date()
       });
     } else {
-      // Update socket ID for existing participant
+      // Update socket ID for existing participant (reconnection)
       existingParticipant.socketId = socket.id;
     }
     
-    // Send current scores to the new participant
-    const currentScores = roomScores.get(roomId) || [];
-    socket.emit('score_history', { scores: currentScores });
-    
-    // Notify others in room about new participant
-    socket.to(roomId).emit('participant_joined', {
-      userId,
-      userName,
-      participantCount: roomParticipants.length
+    // Send current room state to the new participant
+    socket.emit('current_participants', {
+      participants: roomParticipants.map(p => ({
+        userId: p.userId,
+        userName: p.userName,
+        joinedAt: p.joinedAt
+      })),
+      scores: roomScoreData
     });
     
+    // Notify others in room about new participant (unless it's a reconnection)
+    if (!existingParticipant) {
+      socket.to(roomId).emit('participant_joined', {
+        userId,
+        userName,
+        participantCount: roomParticipants.length
+      });
+    }
+    
     console.log(`✅ Room ${roomId} now has ${roomParticipants.length} participants`);
+    console.log(`📊 Room ${roomId} has scores for ${Object.keys(roomScoreData).length} participants`);
   });
 
   // Handle score updates
@@ -172,7 +183,7 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Store the score
+    // Store the latest score for this user (overwrite previous)
     const scoreData = {
       score,
       userId,
@@ -181,20 +192,14 @@ io.on('connection', (socket) => {
       id: `${userId}_${Date.now()}`
     };
     
-    const roomScoreHistory = roomScores.get(roomId) || [];
-    roomScoreHistory.push(scoreData);
-    
-    // Keep only last 100 scores per room
-    if (roomScoreHistory.length > 100) {
-      roomScoreHistory.shift();
-    }
-    
-    roomScores.set(roomId, roomScoreHistory);
+    const roomScoreData = roomScores.get(roomId) || {};
+    roomScoreData[userId] = scoreData; // Store only latest score per user
+    roomScores.set(roomId, roomScoreData);
     
     // Broadcast to all participants in the room
     io.to(roomId).emit('score_received', scoreData);
     
-    console.log(`📢 Score broadcasted to room ${roomId}`);
+    console.log(`📢 Score broadcasted to room ${roomId} (${Object.keys(roomScoreData).length} users have scores)`);
   });
 
   // Handle disconnection
@@ -203,23 +208,26 @@ io.on('connection', (socket) => {
     
     // Remove from all rooms
     rooms.forEach((participants, roomId) => {
+      const disconnectedParticipant = participants.find(p => p.socketId === socket.id);
       const updatedParticipants = participants.filter(p => p.socketId !== socket.id);
-      if (updatedParticipants.length === 0) {
-        // Room is empty, clean up
-        rooms.delete(roomId);
-        roomScores.delete(roomId);
-        console.log(`🧹 Cleaned up empty room: ${roomId}`);
-      } else {
-        rooms.set(roomId, updatedParticipants);
-        
-        // Notify remaining participants
-        const disconnectedParticipant = participants.find(p => p.socketId === socket.id);
-        if (disconnectedParticipant) {
+      
+      if (disconnectedParticipant) {
+        if (updatedParticipants.length === 0) {
+          // Room is empty, clean up
+          rooms.delete(roomId);
+          roomScores.delete(roomId);
+          console.log(`🧹 Cleaned up empty room: ${roomId}`);
+        } else {
+          rooms.set(roomId, updatedParticipants);
+          
+          // Notify remaining participants
           socket.to(roomId).emit('participant_left', {
             userId: disconnectedParticipant.userId,
             userName: disconnectedParticipant.userName,
             participantCount: updatedParticipants.length
           });
+          
+          console.log(`👋 User ${disconnectedParticipant.userName} left room ${roomId}, ${updatedParticipants.length} participants remaining`);
         }
       }
     });
@@ -232,10 +240,19 @@ io.on('connection', (socket) => {
     
     if (rooms.has(roomId)) {
       const participants = rooms.get(roomId);
+      const leavingParticipant = participants.find(p => p.socketId === socket.id);
       const updatedParticipants = participants.filter(p => p.socketId !== socket.id);
       rooms.set(roomId, updatedParticipants);
       
-      console.log(`👋 User left room ${roomId}, ${updatedParticipants.length} participants remaining`);
+      if (leavingParticipant) {
+        socket.to(roomId).emit('participant_left', {
+          userId: leavingParticipant.userId,
+          userName: leavingParticipant.userName,
+          participantCount: updatedParticipants.length
+        });
+      }
+      
+      console.log(`👋 User manually left room ${roomId}, ${updatedParticipants.length} participants remaining`);
     }
   });
 });

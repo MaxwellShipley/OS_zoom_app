@@ -6,7 +6,8 @@ let currentUserId = null;
 let currentUserName = null;
 let isConnectedToRoom = false;
 
-// Store participant scores
+// Store participant data from server
+let participantList = []; // List of participants from server
 let participantScores = new Map(); // userId -> latest score data
 
 // Initialize WebSocket connection
@@ -42,6 +43,25 @@ function connectWebSocket() {
     isConnectedToRoom = false;
   });
   
+  // Handle initial participant list and scores from server
+  socket.on('current_participants', function(data) {
+    console.log('📋 Received current participants:', data);
+    
+    // Update participant list
+    participantList = data.participants || [];
+    
+    // Update scores
+    participantScores.clear();
+    Object.entries(data.scores || {}).forEach(([userId, scoreData]) => {
+      participantScores.set(userId, scoreData);
+    });
+    
+    // Rebuild the UI with server data
+    displayParticipantsFromServer();
+    
+    console.log(`✅ Loaded ${participantList.length} participants and ${participantScores.size} scores from server`);
+  });
+  
   // Handle score updates from other participants
   socket.on('score_received', function(scoreData) {
     console.log('📊 Received score update:', scoreData);
@@ -52,25 +72,37 @@ function connectWebSocket() {
     displayScoreUpdate(scoreData);
   });
   
-  // Handle score history when joining
-  socket.on('score_history', function(data) {
-    console.log('📚 Received score history:', data.scores.length, 'scores');
-    displayScoreHistory(data.scores);
-  });
-  
-  // Handle participant events
+  // Handle new participant joining
   socket.on('participant_joined', function(data) {
     console.log('👤 Participant joined:', data.userName);
     showNotification(`${data.userName} joined the session`);
-    // Automatically refresh the participant list
-    refreshParticipantList();
+    
+    // Add to local participant list if not already there
+    if (!participantList.find(p => p.userId === data.userId)) {
+      participantList.push({
+        userId: data.userId,
+        userName: data.userName,
+        joinedAt: new Date()
+      });
+      
+      // Refresh the display
+      displayParticipantsFromServer();
+    }
   });
   
+  // Handle participant leaving
   socket.on('participant_left', function(data) {
     console.log('👋 Participant left:', data.userName);
     showNotification(`${data.userName} left the session`);
-    // Automatically refresh the participant list
-    refreshParticipantList();
+    
+    // Remove from local participant list
+    participantList = participantList.filter(p => p.userId !== data.userId);
+    
+    // Remove their score
+    participantScores.delete(data.userId);
+    
+    // Refresh the display
+    displayParticipantsFromServer();
   });
   
   socket.on('connect_error', function(error) {
@@ -119,34 +151,13 @@ function sendScore(score) {
   participantScores.set(currentUserId, scoreData);
   updateParticipantScore(currentUserId, scoreData);
   
-  // Also display in the score feed
-  displayScoreUpdate(scoreData, true);
-  
   // Show success feedback
   showNotification(`Your score (${score}) has been shared!`);
 }
 
 function displayScoreUpdate(scoreData, isLocal = false) {
-  // Only update the participant list, no separate scores feed
-  console.log('📊 Score update - updating participant list only');
-}
-
-function displayScoreHistory(scores) {
-  // Clear existing scores and rebuild the map
-  participantScores.clear();
-  
-  // Store the latest score for each participant
-  scores.forEach(score => {
-    const existingScore = participantScores.get(score.userId);
-    if (!existingScore || new Date(score.timestamp) > new Date(existingScore.timestamp)) {
-      participantScores.set(score.userId, score);
-    }
-  });
-  
-  // Refresh the participant display to show all scores
-  refreshParticipantScores();
-  
-  console.log(`📚 Loaded ${participantScores.size} participant scores from history`);
+  // Just log - main display happens in updateParticipantScore
+  console.log('📊 Score update processed');
 }
 
 function updateParticipantScore(userId, scoreData) {
@@ -178,92 +189,8 @@ function updateParticipantScore(userId, scoreData) {
     }
   } else {
     console.log(`⚠️ Participant element not found for userId: ${userId}`);
-    // Try to find by alternative ID matching
-    const allParticipants = document.querySelectorAll('.participant-item');
-    console.log(`🔍 Available participants:`, Array.from(allParticipants).map(p => p.getAttribute('data-user-id')));
   }
 }
-
-function refreshParticipantScores() {
-  console.log('🔄 Refreshing all participant scores...');
-  // Update all participants with their latest scores
-  participantScores.forEach((scoreData, userId) => {
-    updateParticipantScore(userId, scoreData);
-  });
-}
-
-// New function to refresh just the participant list without reinitializing everything
-function refreshParticipantList() {
-  if (!isConfigured) {
-    console.log('⚠️ Cannot refresh - SDK not configured');
-    return;
-  }
-  
-  console.log('🔄 Refreshing participant list...');
-  
-  window.zoomSdk.getMeetingParticipants()
-    .then(function(result) {
-      if (!result || !result.participants) {
-        console.log('⚠️ No participants found during refresh');
-        return;
-      }
-      
-      const participants = result.participants;
-      const participantsContainer = document.getElementById('participants-container');
-      
-      if (!participantsContainer) {
-        console.log('⚠️ Participants container not found, doing full refresh');
-        displayParticipants();
-        return;
-      }
-      
-      // Update the participant count in the header
-      const header = document.querySelector('h2');
-      if (header) {
-        header.textContent = `Meeting Participants & Scores (${participants.length})`;
-      }
-      
-      // Clear and rebuild the participants container
-      participantsContainer.innerHTML = '';
-      
-      participants.forEach(function(p) {
-        const div = document.createElement('div');
-        div.className = 'participant-item';
-        
-        // Use the actual participant ID from the participant list
-        const participantId = p.participantId || p.participantUUID || p.userUUID || 'unknown';
-        div.setAttribute('data-user-id', participantId);
-        
-        const isCurrentUser = (p.screenName === currentUserName);
-        
-        div.innerHTML = `
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong>${p.screenName || 'Unknown'}</strong> ${isCurrentUser ? '(You)' : ''}
-              <br>
-              <small style="color: #666;">ID: ${participantId}</small>
-            </div>
-            <div class="participant-score">
-              <div class="no-score-yet" style="color: #999; font-style: italic;">
-                No score yet
-              </div>
-            </div>
-          </div>
-        `;
-        participantsContainer.appendChild(div);
-      });
-      
-      // Reapply existing scores to the refreshed participant list
-      refreshParticipantScores();
-      
-      console.log(`✅ Refreshed participant list with ${participants.length} participants`);
-    })
-    .catch(function(error) {
-      console.error('❌ Error refreshing participants:', error);
-    });
-}
-
-
 
 function updateConnectionStatus(status) {
   const statusElement = document.getElementById('connection-status');
@@ -310,137 +237,104 @@ function displayError(message) {
   }
 }
 
-// Basic participant display function
-function displayParticipants() {
-  if (!isConfigured) {
-    console.error('❌ SDK not configured yet');
+// Display participants from server data (replaces getMeetingParticipants)
+function displayParticipantsFromServer() {
+  console.log('📊 Displaying participants from server data...');
+  
+  const listContainer = document.getElementById('participant-list');
+  
+  if (participantList.length === 0) {
+    listContainer.innerHTML = `
+      <div class="loading">
+        <h2>👥 Waiting for Participants...</h2>
+        <p>No participants connected yet.</p>
+      </div>
+    `;
     return;
   }
   
-  window.zoomSdk.getMeetingParticipants()
-    .then(function(result) {
-      console.log('📊 Participant data:', result);
-      const listContainer = document.getElementById('participant-list');
-      
-      if (!result || !result.participants) {
-        listContainer.innerHTML = '<div class="error">No participants found</div>';
-        return;
-      }
-      
-      const participants = result.participants;
-      
-      // Find current user by matching screen name
-      const currentUserParticipant = participants.find(p => p.screenName === currentUserName);
-      if (currentUserParticipant) {
-        currentUserId = currentUserParticipant.participantId || 
-                        currentUserParticipant.participantUUID || 
-                        currentUserParticipant.userUUID;
-        console.log(`✅ Found current user ID: ${currentUserId} for ${currentUserName}`);
-      } else {
-        console.warn('⚠️ Could not find current user in participant list');
-        currentUserId = 'unknown';
-      }
-      
-      // Create the main interface
-      listContainer.innerHTML = `
-        <h2>Meeting Participants & Scores (${participants.length})</h2>
-        <div id="connection-status" class="status-connecting">Initializing...</div>
-        
-        <div class="score-section">
-          <h3>📊 Share Your Score</h3>
-          <div class="score-input-container">
-            <input type="number" id="score-input" placeholder="Enter your score" step="0.1">
-            <button onclick="sendScoreFromInput()" class="btn">Share Score</button>
-          </div>
-          <div id="score-feedback" style="margin: 10px 0; min-height: 20px;"></div>
-          <p style="margin: 10px 0; color: #666; font-size: 0.9em;">
-            Your score will appear next to your name below
-          </p>
+  // Create the main interface
+  listContainer.innerHTML = `
+    <h2>Meeting Participants & Scores (${participantList.length})</h2>
+    <div id="connection-status" class="status-connected">Connected to Meeting Room</div>
+    
+    <div class="score-section">
+      <h3>📊 Share Your Score</h3>
+      <div class="score-input-container">
+        <input type="number" id="score-input" placeholder="Enter your score" step="0.1">
+        <button onclick="sendScoreFromInput()" class="btn">Share Score</button>
+      </div>
+      <div id="score-feedback" style="margin: 10px 0; min-height: 20px;"></div>
+      <p style="margin: 10px 0; color: #666; font-size: 0.9em;">
+        Your score will appear next to your name below
+      </p>
+    </div>
+    
+    <h3>👥 Participants & Their Latest Scores:</h3>
+    <div id="participants-container"></div>
+    
+    <button onclick="debugParticipantIds()" class="btn" style="margin-top: 15px; background: #666;">
+      🔍 Debug Info
+    </button>
+  `;
+  
+  // Add participants to the container
+  const participantsContainer = document.getElementById('participants-container');
+  participantList.forEach(function(participant) {
+    const div = document.createElement('div');
+    div.className = 'participant-item';
+    div.setAttribute('data-user-id', participant.userId);
+    
+    const isCurrentUser = (participant.userId === currentUserId);
+    
+    console.log(`👤 Adding participant: ${participant.userName}, ID: ${participant.userId}, Current User: ${isCurrentUser}`);
+    
+    div.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <strong>${participant.userName || 'Unknown'}</strong> ${isCurrentUser ? '(You)' : ''}
+          <br>
+          <small style="color: #666;">ID: ${participant.userId}</small>
         </div>
-        
-        <h3>👥 Participants & Their Latest Scores:</h3>
-        <div id="participants-container"></div>
-        
-        <button onclick="refreshParticipantList()" class="btn" style="margin-top: 15px;">
-          🔄 Refresh Participants
-        </button>
-        
-        <button onclick="debugParticipantIds()" class="btn" style="margin-top: 15px; margin-left: 10px; background: #666;">
-          🔍 Debug IDs
-        </button>
-      `;
-      
-      // Add participants to the container
-      const participantsContainer = document.getElementById('participants-container');
-      participants.forEach(function(p) {
-        const div = document.createElement('div');
-        div.className = 'participant-item';
-        
-        // Use the actual participant ID from the participant list
-        const participantId = p.participantId || p.participantUUID || p.userUUID || 'unknown';
-        div.setAttribute('data-user-id', participantId);
-        
-        const isCurrentUser = (p.screenName === currentUserName);
-        
-        console.log(`👤 Adding participant: ${p.screenName}, ID: ${participantId}, Current User: ${isCurrentUser}`);
-        
-        div.innerHTML = `
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong>${p.screenName || 'Unknown'}</strong> ${isCurrentUser ? '(You)' : ''}
-              <br>
-              <small style="color: #666;">ID: ${participantId}</small>
-            </div>
-            <div class="participant-score">
-              <div class="no-score-yet" style="color: #999; font-style: italic;">
-                No score yet
-              </div>
-            </div>
+        <div class="participant-score">
+          <div class="no-score-yet" style="color: #999; font-style: italic;">
+            No score yet
           </div>
-        `;
-        participantsContainer.appendChild(div);
-      });
-      
-      // Apply existing scores to the participant list
-      refreshParticipantScores();
-      
-      // Focus the score input
-      const scoreInput = document.getElementById('score-input');
-      if (scoreInput) {
-        scoreInput.focus();
-      }
-      
-      console.log('✅ Displayed ' + participants.length + ' participants');
-      console.log('🆔 Current user ID:', currentUserId);
-      
-      // Initialize WebSocket after UI is ready
-      if (!socket) {
-        initializeWebSocket();
-      }
-    })
-    .catch(function(error) {
-      console.error('❌ Error getting participants:', error);
-      displayError('Error loading participants: ' + error.message);
-    });
+        </div>
+      </div>
+    `;
+    participantsContainer.appendChild(div);
+  });
+  
+  // Apply existing scores to the participant list
+  participantScores.forEach((scoreData, userId) => {
+    updateParticipantScore(userId, scoreData);
+  });
+  
+  // Focus the score input
+  const scoreInput = document.getElementById('score-input');
+  if (scoreInput) {
+    scoreInput.focus();
+  }
+  
+  console.log(`✅ Displayed ${participantList.length} participants with ${participantScores.size} scores`);
 }
 
-// Debug function to help troubleshoot ID matching issues
+// Debug function to help troubleshoot
 function debugParticipantIds() {
   console.log('🔍 DEBUG: Current user info:');
   console.log('- currentUserId:', currentUserId);
   console.log('- currentUserName:', currentUserName);
+  console.log('- currentMeetingId:', currentMeetingId);
   
-  console.log('🔍 DEBUG: Participant scores map:');
-  participantScores.forEach((score, userId) => {
-    console.log(`- ${userId}: ${score.userName} = ${score.score}`);
+  console.log('🔍 DEBUG: Participant list from server:');
+  participantList.forEach(p => {
+    console.log(`- ${p.userName} (ID: ${p.userId})`);
   });
   
-  console.log('🔍 DEBUG: DOM participant elements:');
-  const participants = document.querySelectorAll('.participant-item');
-  participants.forEach(p => {
-    const userId = p.getAttribute('data-user-id');
-    const name = p.querySelector('strong').textContent;
-    console.log(`- DOM element: ${name} (ID: ${userId})`);
+  console.log('🔍 DEBUG: Participant scores:');
+  participantScores.forEach((score, userId) => {
+    console.log(`- ${userId}: ${score.userName} = ${score.score}`);
   });
   
   // Show in UI as well
@@ -450,7 +344,10 @@ function debugParticipantIds() {
       <div style="background: #f0f8ff; padding: 10px; border: 1px solid #0078d4; border-radius: 5px; font-size: 0.8em;">
         <strong>Debug Info:</strong><br>
         Your ID: ${currentUserId}<br>
-        Scores stored: ${participantScores.size}<br>
+        Meeting ID: ${currentMeetingId}<br>
+        Participants: ${participantList.length}<br>
+        Scores: ${participantScores.size}<br>
+        Connected: ${isConnectedToRoom ? 'Yes' : 'No'}<br>
         Check console for details
       </div>
     `;
@@ -458,7 +355,7 @@ function debugParticipantIds() {
   }
 }
 
-// Initialize the app with basic error handling
+// Initialize the app with getUserContext instead of getMeetingParticipants
 function initApp() {
   console.log('🚀 Initializing Zoom App...');
   
@@ -471,11 +368,10 @@ function initApp() {
   
   console.log('✅ Zoom SDK found, configuring...');
   
-  // Configure SDK with minimal options
+  // Configure SDK with minimal options - removed getMeetingParticipants
   window.zoomSdk.config({
     version: "0.16",
     capabilities: [
-      'getMeetingParticipants',
       'getRunningContext',
       'getMeetingContext',
       'getUserContext',
@@ -496,7 +392,7 @@ function initApp() {
     if (contextResponse && contextResponse.context === 'inMeeting') {
       console.log('👥 In meeting, getting meeting info...');
       
-      // Get meeting UUID for room identification
+      // Get meeting UUID and user context
       return Promise.all([
         window.zoomSdk.getMeetingUUID(),
         window.zoomSdk.getUserContext()
@@ -517,15 +413,25 @@ function initApp() {
     console.log('🆔 Meeting UUID:', meetingResponse);
     console.log('👤 User context:', userResponse);
     
-    // Store meeting and user info - try multiple ID fields
+    // Store meeting and user info
     currentMeetingId = meetingResponse.meetingUUID;
     currentUserId = userResponse.participantUUID || userResponse.participantId || userResponse.userUUID || 'unknown';
     currentUserName = userResponse.screenName || 'Unknown User';
     
     console.log(`📝 Stored info - Meeting: ${currentMeetingId}, User: ${currentUserId} (${currentUserName})`);
     
-    // Display participants
-    displayParticipants();
+    // Show loading state while connecting to WebSocket
+    const container = document.getElementById('participant-list');
+    container.innerHTML = `
+      <div class="loading">
+        <h2>🔌 Connecting to Session...</h2>
+        <p>Initializing participant sharing system...</p>
+        <div id="connection-status" class="status-connecting">Connecting to WebSocket...</div>
+      </div>
+    `;
+    
+    // Initialize WebSocket connection
+    initializeWebSocket();
   })
   .catch(function(error) {
     console.error('❌ Initialization failed:', error);
