@@ -12,11 +12,11 @@ let participantScores = new Map(); // userId -> latest score data
 
 // Initialize WebSocket connection
 function initializeWebSocket() {
-  console.log('🔌 Initializing WebSocket connection...');
+  console.log('initializing websocket connection...');
   
   // Check if Socket.IO is loaded
   if (typeof io === 'undefined') {
-    console.error('❌ Socket.IO not loaded');
+    console.error('socket.io not loaded');
     updateConnectionStatus('Socket.IO not available');
     return;
   }
@@ -28,7 +28,7 @@ function connectWebSocket() {
   socket = io();
   
   socket.on('connect', function() {
-    console.log('✅ Connected to WebSocket server');
+    console.log('connected to websocket server');
     updateConnectionStatus('WebSocket Connected');
     
     // Join room if we have meeting info
@@ -38,14 +38,14 @@ function connectWebSocket() {
   });
   
   socket.on('disconnect', function() {
-    console.log('❌ Disconnected from WebSocket server');
+    console.log('disconnected from websocket server');
     updateConnectionStatus('WebSocket Disconnected');
     isConnectedToRoom = false;
   });
   
   // Handle initial participant list and scores from server
   socket.on('current_participants', function(data) {
-    console.log('📋 Received current participants:', data);
+    console.log('received current participants:', data);
     
     // Update participant list
     participantList = data.participants || [];
@@ -59,12 +59,12 @@ function connectWebSocket() {
     // Rebuild the UI with server data
     displayParticipantsFromServer();
     
-    console.log(`✅ Loaded ${participantList.length} participants and ${participantScores.size} scores from server`);
+    console.log('loaded', participantList.length, 'participants and', participantScores.size, 'scores from server');
   });
   
   // Handle score updates from other participants
   socket.on('score_received', function(scoreData) {
-    console.log('📊 Received score update:', scoreData);
+    console.log('received score update:', scoreData);
     // Update the participant scores map
     participantScores.set(scoreData.userId, scoreData);
     // Update the display
@@ -74,8 +74,7 @@ function connectWebSocket() {
   
   // Handle new participant joining
   socket.on('participant_joined', function(data) {
-    console.log('👤 Participant joined:', data.userName);
-    showNotification(`${data.userName} joined the session`);
+    console.log('participant joined:', data.userName);
     
     // Add to local participant list if not already there
     if (!participantList.find(p => p.userId === data.userId)) {
@@ -92,8 +91,7 @@ function connectWebSocket() {
   
   // Handle participant leaving
   socket.on('participant_left', function(data) {
-    console.log('👋 Participant left:', data.userName);
-    showNotification(`${data.userName} left the session`);
+    console.log('participant left:', data.userName);
     
     // Remove from local participant list
     participantList = participantList.filter(p => p.userId !== data.userId);
@@ -106,18 +104,18 @@ function connectWebSocket() {
   });
   
   socket.on('connect_error', function(error) {
-    console.error('❌ WebSocket connection error:', error);
+    console.error('websocket connection error:', error);
     updateConnectionStatus('Connection Error');
   });
 }
 
 function joinMeetingRoom() {
   if (!socket || !currentMeetingId || !currentUserId) {
-    console.log('⚠️ Cannot join room - missing required data');
+    console.log('cannot join room - missing required data');
     return;
   }
   
-  console.log(`🚪 Joining room: ${currentMeetingId}`);
+  console.log('joining room:', currentMeetingId);
   
   socket.emit('join_room', {
     roomId: currentMeetingId,
@@ -131,7 +129,7 @@ function joinMeetingRoom() {
 
 function sendScore(score) {
   if (!socket || !isConnectedToRoom || !currentMeetingId) {
-    console.log('⚠️ Cannot send score - not connected to room');
+    console.log('cannot send score - not connected to room');
     alert('Not connected to meeting room');
     return;
   }
@@ -144,49 +142,33 @@ function sendScore(score) {
     timestamp: new Date().toISOString()
   };
   
-  console.log('📤 Sending score:', scoreData);
+  console.log('sending score:', scoreData);
   socket.emit('score_update', scoreData);
   
   // Store locally and update display immediately
   participantScores.set(currentUserId, scoreData);
   updateParticipantScore(currentUserId, scoreData);
-  
-  // Show success feedback
-  showNotification(`Your score (${score}) has been shared!`);
 }
 
 function displayScoreUpdate(scoreData, isLocal = false) {
   // Just log - main display happens in updateParticipantScore
-  console.log('📊 Score update processed');
+  console.log('score update processed');
 }
 
 function updateParticipantScore(userId, scoreData) {
-  console.log(`Updating participant score for ${userId}:`, scoreData);
+  console.log('updating participant score for', userId, ':', scoreData);
   
   const participantElement = document.querySelector(`[data-user-id="${userId}"]`);
   if (participantElement) {
     const scoreElement = participantElement.querySelector('.participant-score');
     if (scoreElement) {
-      const isCurrentUser = userId === currentUserId;
-      
-      scoreElement.innerHTML = `
-        <span class="score-display ${isCurrentUser ? 'current-user-score' : ''}">
-          ${scoreData.score}
-        </span>
-      `;
-      
-      // Add a brief highlight animation
-      scoreElement.style.animation = 'scoreUpdate 1s ease-out';
-      setTimeout(() => {
-        scoreElement.style.animation = '';
-      }, 1000);
-      
-      console.log(`Updated score display for ${scoreData.userName}`);
+      scoreElement.innerHTML = `<span>${scoreData.score}</span>`;
+      console.log('updated score display for', scoreData.userName);
     } else {
-      console.log('Score element not found for participant');
+      console.log('score element not found for participant');
     }
   } else {
-    console.log(`Participant element not found for userId: ${userId}`);
+    console.log('participant element not found for userid:', userId);
   }
 }
 
@@ -228,7 +210,7 @@ function displayError(message) {
   if (container) {
     container.innerHTML = `
       <div class="error">
-        <h2>❌ Error</h2>
+        <h2>Error</h2>
         <div>${message}</div>
       </div>
     `;
@@ -277,7 +259,7 @@ function displayParticipantsFromServer() {
     
     const isCurrentUser = (participant.userId === currentUserId);
     
-    console.log(`Adding participant: ${participant.userName}, ID: ${participant.userId}, Current User: ${isCurrentUser}`);
+    console.log('adding participant:', participant.userName, ', id:', participant.userId, ', current user:', isCurrentUser);
     
     div.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -303,24 +285,24 @@ function displayParticipantsFromServer() {
     scoreInput.focus();
   }
   
-  console.log(`Displayed ${participantList.length} participants with ${participantScores.size} scores`);
+  console.log('displayed', participantList.length, 'participants with', participantScores.size, 'scores');
 }
 
 // Debug function to help troubleshoot
 function debugParticipantIds() {
-  console.log('DEBUG: Current user info:');
-  console.log('- currentUserId:', currentUserId);
-  console.log('- currentUserName:', currentUserName);
-  console.log('- currentMeetingId:', currentMeetingId);
+  console.log('debug: current user info:');
+  console.log('- currentuserid:', currentUserId);
+  console.log('- currentusername:', currentUserName);
+  console.log('- currentmeetingid:', currentMeetingId);
   
-  console.log('DEBUG: Participant list from server:');
+  console.log('debug: participant list from server:');
   participantList.forEach(p => {
-    console.log(`- ${p.userName} (ID: ${p.userId})`);
+    console.log('-', p.userName, '(id:', p.userId, ')');
   });
   
-  console.log('DEBUG: Participant scores:');
+  console.log('debug: participant scores:');
   participantScores.forEach((score, userId) => {
-    console.log(`- ${userId}: ${score.userName} = ${score.score}`);
+    console.log('-', userId, ':', score.userName, '=', score.score);
   });
   
   // Show in UI as well
