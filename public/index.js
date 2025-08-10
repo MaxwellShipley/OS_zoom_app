@@ -1,342 +1,295 @@
-// Simple, robust initialization without complex state management
-let isConfigured = false;
+// public/index.js — Glass Panels UI + Dark toggle already in index.html
+// Keeps your existing protocol + login flow + END_DATA on leave.
+
 let socket = null;
 let currentMeetingId = null;
-let currentUserId = null;
+let originStoryUserId = null;   // set after login
 let currentUserName = null;
 let isConnectedToRoom = false;
 
-// Store participant data from server
-let participantList = []; // List of participants from server
-let participantScores = new Map(); // userId -> latest score data
+let participantList = [];
+let participantScores = new Map();
 
-// Initialize WebSocket connection
-function initializeWebSocket() {
-  console.log('initializing websocket connection...');
-  
-  // Check if Socket.IO is loaded
-  if (typeof io === 'undefined') {
-    console.error('socket.io not loaded');
-    updateConnectionStatus('Socket.IO not available');
+const CMD = {
+  0x00: 'TEST_CONNECTION',
+  0x01: 'CONNECTION_ESTABLISHED',
+  0x02: 'VALIDATE_USER',
+  0x03: 'USER_VALID',
+  0x04: 'USER_INVALID',
+  0x05: 'UPDATE_USER',
+  0x06: 'USER_UPDATED',
+  0x07: 'BEGIN_DATA',
+  0x08: 'DATA_TRANSMISSION',
+  0x09: 'END_DATA',
+  0x0A: 'END_CONNECTION',
+  0x0B: 'BAD_COMMAND',
+  0x0C: 'BAD_DATA',
+  0x0D: 'MEETING_INFO',
+  0x0E: 'REGISTER_LOCAL'
+};
+const logRecv = (cmd, data) =>
+  console.log(`⬇️  os_packet RECV [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
+const logSend = (dest, cmd, data) =>
+  console.log(`⬆️  os_packet SEND → ${dest} [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
+
+// ---------- UI (Glass) ----------
+
+function renderLogin(disabled = true, serverStatus = 'Initializing…') {
+  const root = document.getElementById('participant-list');
+  root.innerHTML = `
+    <div class="glass login">
+      <h2>Welcome back</h2>
+      <p>Sign in with your OriginStory account to join your meeting.</p>
+
+      <div class="field">
+        <label class="label" for="os-username">Email or Username</label>
+        <input class="input" id="os-username" type="text" placeholder="you@example.com" ${disabled ? 'disabled' : ''} />
+      </div>
+      <div class="field">
+        <label class="label" for="os-password">Password</label>
+        <input class="input" id="os-password" type="password" placeholder="••••••••" ${disabled ? 'disabled' : ''} />
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="os-login-btn" class="btn" ${disabled ? 'disabled' : ''}>Sign In</button>
+        <div id="connection-status" class="status ${serverStatus === 'Connected' ? 'status--connected' : 'status--disconnected'}">
+          ${serverStatus === 'Connected' ? 'Connected' : 'Disconnected'}
+        </div>
+      </div>
+
+      <div id="os-login-msg" style="min-height:20px;color:var(--muted);margin-top:8px;"></div>
+    </div>
+  `;
+
+  document.getElementById('os-login-btn')?.addEventListener('click', onLoginSubmit);
+  document.getElementById('os-password')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') onLoginSubmit();
+  });
+}
+
+function renderParticipants() {
+  const root = document.getElementById('participant-list');
+
+  if (!participantList.length) {
+    root.innerHTML = `
+      <div class="glass panel">
+        <div class="panel-header">
+          <div class="panel-title">Participants (0)</div>
+          <div class="meta">Waiting for participants…</div>
+        </div>
+        <div class="loading" style="padding:10px 0;">No participants connected yet.</div>
+      </div>`;
     return;
   }
-  
-  connectWebSocket();
+
+  root.innerHTML = `
+    <div class="glass panel">
+      <div class="panel-header">
+        <div class="panel-title">Participants (${participantList.length})</div>
+        <div class="meta">Connected • ${shortId(currentMeetingId)}</div>
+      </div>
+      <div id="participants-container" class="list"></div>
+    </div>
+  `;
+
+  const container = document.getElementById('participants-container');
+  participantList.forEach((p) => {
+    const prob = participantScores.get(p.userId)?.authentication;
+    const probText = (typeof prob === 'number') ? prob.toFixed(3) : '—';
+    const tier = (typeof prob === 'number')
+      ? (prob >= 0.7 ? 'high' : prob >= 0.3 ? 'med' : 'low')
+      : 'med';
+
+    const row = document.createElement('div');
+    row.className = 'row-item';
+    row.setAttribute('data-user-id', p.userId);
+    row.innerHTML = `
+      <div class="user">
+        <div class="name">${escapeHtml(p.userName || 'Unknown')}</div>
+        ${p.userId === originStoryUserId ? '<div class="you">You</div>' : ''}
+        <div class="userid">${escapeHtml(p.userId)}</div>
+      </div>
+      <div class="prob" data-v="${tier}"><span>${probText}</span></div>
+    `;
+    container.appendChild(row);
+  });
 }
 
-function connectWebSocket() {
-  socket = io();
-  
-  socket.on('connect', function() {
-    console.log('connected to websocket server');
-    updateConnectionStatus('WebSocket Connected');
-    
-    // Join room if we have meeting info
-    if (currentMeetingId && currentUserId && !isConnectedToRoom) {
-      joinMeetingRoom();
+function updateParticipantProbability(userId, pd) {
+  const el = document.querySelector(`[data-user-id="${CSS.escape(userId)}"] .prob span`);
+  if (el) {
+    const probText = (typeof pd.authentication === 'number') ? pd.authentication.toFixed(3) : '—';
+    el.textContent = probText;
+    const pill = el.closest('.prob');
+    if (pill) {
+      const v = pd.authentication;
+      pill.setAttribute('data-v', (typeof v === 'number') ? (v >= 0.85 ? 'high' : v >= 0.5 ? 'med' : 'low') : 'med');
+      // subtle pulse
+      pill.classList.remove('prob--updated');
+      // force reflow to restart animation if you later add it
+      void pill.offsetWidth;
+      pill.classList.add('prob--updated');
     }
-  });
-  
-  socket.on('disconnect', function() {
-    console.log('disconnected from websocket server');
-    updateConnectionStatus('WebSocket Disconnected');
-    isConnectedToRoom = false;
-  });
-  
-  // Handle initial participant list and scores from server
-  socket.on('current_participants', function(data) {
-    console.log('received current participants:', data);
-    
-    // Update participant list
-    participantList = data.participants || [];
-    
-    // Update scores
-    participantScores.clear();
-    Object.entries(data.scores || {}).forEach(([userId, scoreData]) => {
-      participantScores.set(userId, scoreData);
-    });
-    
-    // Rebuild the UI with server data
-    displayParticipantsFromServer();
-    
-    console.log('loaded', participantList.length, 'participants and', participantScores.size, 'scores from server');
-  });
-  
-  // Handle score updates from other participants
-  socket.on('score_received', function(scoreData) {
-    console.log('received score update:', scoreData);
-    // Update the participant scores map
-    participantScores.set(scoreData.userId, scoreData);
-    // Update the display
-    updateParticipantScore(scoreData.userId, scoreData);
-    displayScoreUpdate(scoreData);
-  });
-  
-  // Handle new participant joining
-  socket.on('participant_joined', function(data) {
-    console.log('participant joined:', data.userName);
-    
-    // Add to local participant list if not already there
-    if (!participantList.find(p => p.userId === data.userId)) {
-      participantList.push({
-        userId: data.userId,
-        userName: data.userName,
-        joinedAt: new Date()
-      });
-      
-      // Refresh the display
-      displayParticipantsFromServer();
-    }
-  });
-  
-  // Handle participant leaving
-  socket.on('participant_left', function(data) {
-    console.log('participant left:', data.userName);
-    
-    // Remove from local participant list
-    participantList = participantList.filter(p => p.userId !== data.userId);
-    
-    // Remove their score
-    participantScores.delete(data.userId);
-    
-    // Refresh the display
-    displayParticipantsFromServer();
-  });
-  
-  socket.on('connect_error', function(error) {
-    console.error('websocket connection error:', error);
-    updateConnectionStatus('Connection Error');
-  });
-}
-
-function joinMeetingRoom() {
-  if (!socket || !currentMeetingId || !currentUserId) {
-    console.log('cannot join room - missing required data');
-    return;
-  }
-  
-  console.log('joining room:', currentMeetingId);
-  
-  socket.emit('join_room', {
-    roomId: currentMeetingId,
-    userId: currentUserId,
-    userName: currentUserName || 'Unknown User'
-  });
-  
-  isConnectedToRoom = true;
-  updateConnectionStatus(`Connected to Meeting Room`);
-}
-
-function sendScore(score) {
-  if (!socket || !isConnectedToRoom || !currentMeetingId) {
-    console.log('cannot send score - not connected to room');
-    alert('Not connected to meeting room');
-    return;
-  }
-  
-  const scoreData = {
-    roomId: currentMeetingId,
-    score: score,
-    userId: currentUserId,
-    userName: currentUserName || 'Unknown User',
-    timestamp: new Date().toISOString()
-  };
-  
-  console.log('sending score:', scoreData);
-  socket.emit('score_update', scoreData);
-  
-  // Store locally and update display immediately
-  participantScores.set(currentUserId, scoreData);
-  updateParticipantScore(currentUserId, scoreData);
-}
-
-function displayScoreUpdate(scoreData, isLocal = false) {
-  // Just log - main display happens in updateParticipantScore
-  console.log('score update processed');
-}
-
-function updateParticipantScore(userId, scoreData) {
-  console.log('updating participant score for', userId, ':', scoreData);
-  
-  const participantElement = document.querySelector(`[data-user-id="${userId}"]`);
-  if (participantElement) {
-    const scoreElement = participantElement.querySelector('.participant-score');
-    if (scoreElement) {
-      scoreElement.innerHTML = `<span>${scoreData.score}</span>`;
-      console.log('updated score display for', scoreData.userName);
-    } else {
-      console.log('score element not found for participant');
-    }
-  } else {
-    console.log('participant element not found for userid:', userId);
-  }
-}
-
-function updateConnectionStatus(status) {
-  const statusElement = document.getElementById('connection-status');
-  if (statusElement) {
-    statusElement.textContent = status;
-    
-    // Update CSS class based on status
-    statusElement.className = '';
-    if (status.includes('Connected to Meeting') || status.includes('WebSocket Connected')) {
-      statusElement.className = 'status-connected';
-    } else if (status.includes('Connecting') || status.includes('Initializing')) {
-      statusElement.className = 'status-connecting';
-    } else {
-      statusElement.className = 'status-disconnected';
-    }
-  }
-}
-
-function showNotification(message) {
-  console.log(message);
-  
-  // Try to use Zoom's notification system first
-  if (window.zoomSdk && isConfigured) {
-    window.zoomSdk.showNotification({
-      type: 'info',
-      title: 'Score Update',
-      message: message
-    }).catch(() => {
-      // Fallback - could add a visual notification here
-      console.log('Zoom notification failed, using fallback');
-    });
   }
 }
 
 function displayError(message) {
-  const container = document.getElementById('participant-list');
-  if (container) {
-    container.innerHTML = `
-      <div class="error">
-        <h2>Error</h2>
-        <div>${message}</div>
-      </div>
-    `;
-  }
+  const root = document.getElementById('participant-list');
+  root.innerHTML = `
+    <div class="glass panel">
+      <div class="panel-header"><div class="panel-title">Error</div></div>
+      <div class="error">${message}</div>
+    </div>`;
 }
 
-// Display participants from server data (replaces getMeetingParticipants)
-function displayParticipantsFromServer() {
-  console.log('Displaying participants from server data...');
-  
-  const listContainer = document.getElementById('participant-list');
-  
-  if (participantList.length === 0) {
-    listContainer.innerHTML = `
-      <div class="loading">
-        <h2>Waiting for Participants...</h2>
-        <p>No participants connected yet.</p>
-      </div>
-    `;
+function shortId(id) {
+  if (!id || typeof id !== 'string') return '';
+  return id.length > 14 ? `${id.slice(0, 8)}…` : id;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- Login submit ----------
+
+function onLoginSubmit() {
+  const username = (document.getElementById('os-username')?.value || '').trim();
+  const password = (document.getElementById('os-password')?.value || '').trim();
+
+  const msg = document.getElementById('os-login-msg');
+  if (!username || !password) {
+    msg.textContent = 'Please enter a username/email and password.';
     return;
   }
-  
-  // Create the main interface
-  listContainer.innerHTML = `
-    <h2>Meeting Participants (${participantList.length})</h2>
-    <div id="connection-status" class="status-connected">Connected to Meeting Room</div>
-    
-    <div class="score-section">
-      <div class="score-input-container">
-        <label for="score-input">New Score:</label>
-        <input type="number" id="score-input" placeholder="0" step="0.1">
-        <button onclick="sendScoreFromInput()" class="btn">Share</button>
-      </div>
-      <div id="score-feedback" style="margin: 10px 0; min-height: 20px;"></div>
-    </div>
-    
-    <div id="participants-container"></div>
-  `;
-  
-  // Add participants to the container
-  const participantsContainer = document.getElementById('participants-container');
-  participantList.forEach(function(participant) {
-    const div = document.createElement('div');
-    div.className = 'participant-item';
-    div.setAttribute('data-user-id', participant.userId);
-    
-    const isCurrentUser = (participant.userId === currentUserId);
-    
-    console.log('adding participant:', participant.userName, ', id:', participant.userId, ', current user:', isCurrentUser);
-    
-    div.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <div>
-          <strong>${participant.userName || 'Unknown'}</strong> ${isCurrentUser ? '(You)' : ''}
-        </div>
-        <div class="participant-score">
-          <span class="no-score-yet" style="color: #999;">No score</span>
-        </div>
-      </div>
-    `;
-    participantsContainer.appendChild(div);
-  });
-  
-  // Apply existing scores to the participant list
-  participantScores.forEach((scoreData, userId) => {
-    updateParticipantScore(userId, scoreData);
-  });
-  
-  // Focus the score input
-  const scoreInput = document.getElementById('score-input');
-  if (scoreInput) {
-    scoreInput.focus();
-  }
-  
-  console.log('displayed', participantList.length, 'participants with', participantScores.size, 'scores');
+
+  const pkt = { cmd: 0x02, data: { username, password } }; // VALIDATE_USER
+  logSend('server', pkt.cmd, pkt.data);
+  socket.emit('os_packet', pkt);
+  msg.textContent = 'Validating…';
 }
 
-// Debug function to help troubleshoot
-function debugParticipantIds() {
-  console.log('debug: current user info:');
-  console.log('- currentuserid:', currentUserId);
-  console.log('- currentusername:', currentUserName);
-  console.log('- currentmeetingid:', currentMeetingId);
-  
-  console.log('debug: participant list from server:');
-  participantList.forEach(p => {
-    console.log('-', p.userName, '(id:', p.userId, ')');
-  });
-  
-  console.log('debug: participant scores:');
-  participantScores.forEach((score, userId) => {
-    console.log('-', userId, ':', score.userName, '=', score.score);
-  });
-  
-  // Show in UI as well
-  const feedback = document.getElementById('score-feedback');
-  if (feedback) {
-    feedback.innerHTML = `
-      <div style="background: #f0f8ff; padding: 10px; border: 1px solid #0078d4; border-radius: 5px; font-size: 0.8em;">
-        <strong>Debug Info:</strong><br>
-        Your ID: ${currentUserId}<br>
-        Meeting ID: ${currentMeetingId}<br>
-        Participants: ${participantList.length}<br>
-        Scores: ${participantScores.size}<br>
-        Connected: ${isConnectedToRoom ? 'Yes' : 'No'}<br>
-        Check console for details
-      </div>
-    `;
-    setTimeout(() => feedback.innerHTML = '', 5000);
+// ---------- Socket / protocol ----------
+
+function initializeWebSocket() {
+  if (typeof io === 'undefined') {
+    console.error('socket.io not loaded');
+    renderLogin(true, 'Socket.IO not available');
+    return;
   }
+  socket = io();
+
+  socket.on('connect', () => {
+    // Show login immediately (disabled until TEST_CONNECTION returns)
+    renderLogin(true, 'Disconnected');
+    // TEST_CONNECTION (0x00)
+    const pkt = { cmd: 0x00 };
+    logSend('server', pkt.cmd, pkt.data);
+    socket.emit('os_packet', pkt);
+  });
+
+  socket.on('disconnect', () => {
+    renderLogin(true, 'Disconnected');
+    document.getElementById('connection-status').style.color = '#dc2626'; // red
+  });
+
+  socket.on('current_participants', (data) => {
+    participantList = data.participants || [];
+    participantScores.clear();
+    Object.entries(data.scores || {}).forEach(([userId, probData]) => {
+      participantScores.set(userId, probData);
+    });
+    renderParticipants();
+  });
+
+  socket.on('os_packet', (packet) => {
+    if (!packet || typeof packet.cmd === 'undefined') return;
+    const cmd = Number(packet.cmd);
+    const d = packet.data || {};
+    logRecv(cmd, d);
+
+    if (cmd === 0x01) { // CONNECTION_ESTABLISHED
+      renderLogin(false, 'Connected');
+      document.getElementById('connection-status').style.color = '#16a34a'; // green
+      return;
+    }
+    if (cmd === 0x03) { // USER_VALID
+      const username = (document.getElementById('os-username')?.value || '').trim();
+      originStoryUserId = username; // For now, OS user id = username/email
+      const hint = document.getElementById('os-login-msg');
+      if (hint) hint.textContent = 'Login successful! Joining meeting…';
+      sendMeetingInfo();
+      return;
+    }
+    if (cmd === 0x04) { // USER_INVALID
+      const hint = document.getElementById('os-login-msg');
+      if (hint) hint.textContent = d?.error || 'Invalid credentials.';
+      return;
+    }
+    if (cmd === 0x08) { // DATA_TRANSMISSION
+      const userId = d.userId;
+      const pd = { authentication: d.authentication, timestamp: d.timestamp, userId, userName: d.userName };
+      participantScores.set(userId, pd);
+      updateParticipantProbability(userId, pd);
+      return;
+    }
+  });
+
+  socket.on('participant_joined', (data) => {
+    if (!participantList.find(p => p.userId === data.userId)) {
+      participantList.push({ userId: data.userId, userName: data.userName, joinedAt: new Date() });
+      renderParticipants();
+    }
+  });
+
+  socket.on('participant_left', (data) => {
+    participantList = participantList.filter(p => p.userId !== data.userId);
+    participantScores.delete(data.userId);
+    renderParticipants();
+  });
+
+  socket.on('connect_error', (err) => {
+    console.error('websocket connection error:', err);
+    renderLogin(true, 'Connection error');
+  });
 }
 
-// Initialize the app with getUserContext instead of getMeetingParticipants
+function sendMeetingInfo() {
+  if (!socket || !currentMeetingId || !originStoryUserId) return;
+
+  const pkt = {
+    cmd: 0x0D, // MEETING_INFO
+    data: {
+      meetingId: currentMeetingId,
+      originStoryUserId,
+      userName: currentUserName || 'Unknown User'
+    }
+  };
+  logSend('server', pkt.cmd, pkt.data);
+  socket.emit('os_packet', pkt);
+  isConnectedToRoom = true;
+}
+
+function sendEndData() {
+  if (!socket || !originStoryUserId) return;
+  const pkt = { cmd: 0x09, data: { meetingId: currentMeetingId || null, originStoryUserId } };
+  logSend('server', pkt.cmd, pkt.data);
+  try { socket.emit('os_packet', pkt); } catch(e) { /* ignore */ }
+}
+
+// Fire END DATA when the app is going away or becoming hidden
+window.addEventListener('beforeunload', () => { sendEndData(); });
+window.addEventListener('pagehide', () => { sendEndData(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sendEndData(); });
+
+// ---------- Zoom SDK init ----------
+
 function initApp() {
-  console.log('🚀 Initializing Zoom App...');
-  
-  // Check if SDK is available
   if (!window.zoomSdk) {
-    console.error('❌ Zoom SDK not found');
-    displayError('Zoom SDK Not Found. Make sure appssdk.zoom.us is in your domain allowlist.');
+    displayError('Zoom SDK Not Found. Make sure appssdk.zoom.us is in your allowed domains.');
     return;
   }
-  
-  console.log('✅ Zoom SDK found, configuring...');
-  
-  // Configure SDK with minimal options - removed getMeetingParticipants
+
   window.zoomSdk.config({
     version: "0.16",
     capabilities: [
@@ -344,84 +297,44 @@ function initApp() {
       'getMeetingContext',
       'getUserContext',
       'getMeetingUUID',
-      'showNotification'
+      'showNotification',
+      'onMeeting'
     ]
   })
-  .then(function(configResponse) {
-    console.log('✅ SDK configured:', configResponse);
-    isConfigured = true;
-    
-    // Get running context
-    return window.zoomSdk.getRunningContext();
-  })
-  .then(function(contextResponse) {
-    console.log('📍 Running context:', contextResponse);
-    
-    if (contextResponse && contextResponse.context === 'inMeeting') {
-      console.log('👥 In meeting, getting meeting info...');
-      
-      // Get meeting UUID and user context
-      return Promise.all([
-        window.zoomSdk.getMeetingUUID(),
-        window.zoomSdk.getUserContext()
-      ]);
-    } else {
-      const container = document.getElementById('participant-list');
-      container.innerHTML = `
-        <div class="error">
-          <h2>📵 Not in Meeting</h2>
-          <p>This app must be opened during a Zoom meeting.</p>
-          <p><strong>Current context:</strong> ${contextResponse ? contextResponse.context : 'unknown'}</p>
-        </div>
-      `;
+  .then(() => window.zoomSdk.getRunningContext())
+  .then((ctx) => {
+    if (!ctx || ctx.context !== 'inMeeting') {
+      displayError(`<strong>📵 Not in Meeting</strong><br>Current context: ${ctx ? ctx.context : 'unknown'}`);
       throw new Error('Not in meeting');
     }
+    return Promise.all([ window.zoomSdk.getMeetingUUID(), window.zoomSdk.getUserContext() ]);
   })
-  .then(function([meetingResponse, userResponse]) {
-    console.log('🆔 Meeting UUID:', meetingResponse);
-    console.log('👤 User context:', userResponse);
-    
-    // Store meeting and user info
+  .then(([meetingResponse, userResponse]) => {
     currentMeetingId = meetingResponse.meetingUUID;
-    currentUserId = userResponse.participantUUID || userResponse.participantId || userResponse.userUUID || 'unknown';
     currentUserName = userResponse.screenName || 'Unknown User';
-    
-    console.log(`📝 Stored info - Meeting: ${currentMeetingId}, User: ${currentUserId} (${currentUserName})`);
-    
-    // Show loading state while connecting to WebSocket
-    const container = document.getElementById('participant-list');
-    container.innerHTML = `
-      <div class="loading">
-        <h2>🔌 Connecting to Session...</h2>
-        <p>Initializing participant sharing system...</p>
-        <div id="connection-status" class="status-connecting">Connecting to WebSocket...</div>
-      </div>
-    `;
-    
-    // Initialize WebSocket connection
+
+    // Render login shell; socket will enable it after TEST_CONNECTION
+    renderLogin(true, 'Initializing…');
+
     initializeWebSocket();
-  })
-  .catch(function(error) {
-    console.error('❌ Initialization failed:', error);
-    
-    if (error.message === 'Not in meeting') {
-      return; // Already handled above
+
+    // Optional: watch meeting end/leave to send END_DATA
+    if (window.zoomSdk?.onMeeting) {
+      window.zoomSdk.onMeeting((evt) => {
+        const payload = evt || {};
+        const state = payload.meetingState || payload.state || payload.action || payload.status || '';
+        if (String(state).toLowerCase().includes('end') || String(state).toLowerCase().includes('leave')) {
+          sendEndData();
+        }
+      });
     }
-    
-    displayError(`
-      <strong>Initialization Failed:</strong> ${error.message}
-      <br><br>
-      <strong>Make sure you have:</strong>
-      <ul style="text-align: left; margin: 15px 0;">
-        <li>Added appssdk.zoom.us to domain allowlist</li>
-        <li>Added required APIs in Zoom Marketplace</li>
-        <li>Opened this app from within a Zoom meeting</li>
-      </ul>
-    `);
+  })
+  .catch((err) => {
+    if (err && err.message === 'Not in meeting') return;
+    displayError(`<strong>Initialization Failed:</strong> ${err.message || err}`);
   });
 }
 
-// Wait for page to load, then initialize
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initApp);
 } else {

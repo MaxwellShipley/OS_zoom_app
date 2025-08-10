@@ -10,34 +10,28 @@ export const zoomApp = {
   clientId: process.env.ZOOM_APP_CLIENT_ID,
   clientSecret: process.env.ZOOM_APP_CLIENT_SECRET,
   redirectUrl: process.env.ZOOM_APP_REDIRECT_URL,
-  
+
   // SDK Configuration
   sdkVersion: '0.16',
-  
+
   // Required capabilities that match your manifest APIs
   capabilities: [
-    'getMeetingParticipants',
+    // Keep only what you actually use; adding 'onMeeting' for END DATA logic
     'getRunningContext',
     'getMeetingContext',
     'getUserContext',
-    'runRenderingContext',
-    'openUrl',
-    'drawWebView',
     'getMeetingUUID',
-    'postMessage',
-    'onMeeting',
-    'onMyUserContextChange',
-    'onMessage',
-    'showNotification'
+    'showNotification',
+    'onMeeting'
   ],
-  
-  // Required scopes for API access
+
+  // Required scopes for API access (unchanged for now)
   requiredScopes: [
     'zoomapp:inmeeting',
     'meeting:read',
     'user:read'
   ],
-  
+
   // Allowed domains for the embedded browser
   allowedDomains: [
     'appssdk.zoom.us',
@@ -51,11 +45,11 @@ export const redirectUri = zoomApp.redirectUrl;
 export const websocket = {
   // Maximum number of scores to store per room
   maxScoresPerRoom: 100,
-  
+
   // Room cleanup interval (in milliseconds)
   roomCleanupInterval: 5 * 60 * 1000, // 5 minutes
-  
-  // Score sharing settings
+
+  // Score/probability sharing settings
   scoreSharing: {
     enableHistory: true,
     enableNotifications: true,
@@ -67,11 +61,11 @@ export const websocket = {
 export function validateConfig() {
   const required = ['ZOOM_APP_CLIENT_ID', 'ZOOM_APP_CLIENT_SECRET', 'ZOOM_APP_REDIRECT_URL'];
   const missing = required.filter(key => !process.env[key]);
-  
+
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
-  
+
   console.log('✅ Configuration validated successfully');
   return true;
 }
