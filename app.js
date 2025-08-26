@@ -3,6 +3,9 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import bcrypt from 'bcryptjs';
 import 'dotenv/config';
 
 const app = express();
@@ -17,13 +20,29 @@ const io = new Server(server, {
 const port = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Store room participants and latest probabilities only
+/** ──────────────────────────────────────────────────────────────
+ *  AWS / DynamoDB
+ *  ────────────────────────────────────────────────────────────── */
+const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const OS_USERS_TABLE = process.env.OS_USERS_TABLE;
+
+const ddb = new DynamoDBClient({ region: AWS_REGION });
+const doc = DynamoDBDocumentClient.from(ddb);
+
+// normalize username (case-insensitive login)
+const norm = (s) => (s || '').trim().toLowerCase();
+
+/** ──────────────────────────────────────────────────────────────
+ *  In-memory state for meetings and probabilities
+ *  ────────────────────────────────────────────────────────────── */
 // rooms: Map<meetingId, Array<{socketId, userId, userName, joinedAt}>>
 // roomScores: Map<meetingId, Record<userId, {authentication, timestamp, userId, userName}>>
 const rooms = new Map();
 const roomScores = new Map();
 
-// Set security headers required by Zoom (OWASP compliance)
+/** ──────────────────────────────────────────────────────────────
+ *  Security headers (Zoom requirements)
+ *  ────────────────────────────────────────────────────────────── */
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.zoom.us https://*.zoomgov.com;");
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -37,25 +56,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Enable JSON parsing
+// Enable JSON parsing & static files
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serve static files from the 'public' directory
 app.use(express.static(join(__dirname, 'public')));
 
-// The root route serves your main app page
+// Routes
 app.get('/', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
-// Serve the manifest file - crucial for Zoom to recognize the app
 app.get('/zoomapp.manifest.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.sendFile(join(__dirname, 'zoomapp.manifest.json'));
 });
 
-// OAuth callback endpoint for app installation
 app.get('/auth', (req, res) => {
   const { code } = req.query;
   if (code) {
@@ -85,7 +100,6 @@ app.get('/auth', (req, res) => {
   }
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -96,25 +110,44 @@ app.get('/health', (req, res) => {
   });
 });
 
-/**
- * Socket.IO connection handling with OriginStory protocol (os_packet)
- * Numeric command codes:
- * 0x00 TEST_CONNECTION             -> 0x01 CONNECTION_ESTABLISHED
- * 0x02 VALIDATE_USER               -> 0x03 USER_VALID | 0x04 USER_INVALID
- * 0x0E REGISTER_LOCAL  (local client registers originStoryUserId)
- * 0x0D MEETING_INFO    (zoom app sends meetingId + originStoryUserId)
- * 0x08 DATA_TRANSMISSION (local client sends probability)
- * 0x09 END_DATA        (zoom app requests local client to stop streaming)
- * 0x0B BAD_COMMAND
- * 0x0C BAD_DATA
- */
+/** ──────────────────────────────────────────────────────────────
+ *  Socket.IO: OriginStory os_packet protocol
+ *  Commands:
+ *   0x00 TEST_CONNECTION     -> 0x01 CONNECTION_ESTABLISHED
+ *   0x02 VALIDATE_USER       -> 0x03 USER_VALID | 0x04 USER_INVALID
+ *   0x10 CREATE_USER         -> 0x03 USER_VALID | 0x04 USER_INVALID
+ *   0x0E REGISTER_LOCAL      (local client registers originStoryUserId)
+ *   0x0D MEETING_INFO        (zoom app sends meetingId + originStoryUserId)
+ *   0x08 DATA_TRANSMISSION   (local client sends probability)
+ *   0x09 END_DATA            (zoom app -> server -> local client)
+ *   0x0B BAD_COMMAND
+ *   0x0C BAD_DATA
+ *  ────────────────────────────────────────────────────────────── */
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // Global state
+  // Global maps
   if (!global.osUserToLocalSocket) global.osUserToLocalSocket = new Map(); // originStoryUserId -> socketId
   if (!global.authHistory) global.authHistory = new Map(); // meetingId -> Map<userId, Array<{authentication,timestamp}>>
   if (!global.userToMeeting) global.userToMeeting = new Map(); // originStoryUserId -> meetingId
+
+  // Bad-login throttle (per-socket)
+  if (!global.badLoginMap) global.badLoginMap = new Map();
+  const BAD_LOGIN_WINDOW_MS = 60_000;
+  const BAD_LOGIN_LIMIT = 5;
+  const canAttemptLogin = (sid) => {
+    const now = Date.now();
+    const rec = global.badLoginMap.get(sid);
+    if (!rec) return true;
+    if (now - rec.firstAt > BAD_LOGIN_WINDOW_MS) { global.badLoginMap.delete(sid); return true; }
+    return rec.count < BAD_LOGIN_LIMIT;
+  };
+  const noteBadLogin = (sid) => {
+    const now = Date.now();
+    const rec = global.badLoginMap.get(sid);
+    if (!rec) global.badLoginMap.set(sid, { count: 1, firstAt: now });
+    else rec.count++;
+  };
 
   // Pretty names for logs
   const CMD = {
@@ -132,75 +165,157 @@ io.on('connection', (socket) => {
     0x0B: 'BAD_COMMAND',
     0x0C: 'BAD_DATA',
     0x0D: 'MEETING_INFO',
-    0x0E: 'REGISTER_LOCAL'
+    0x0E: 'REGISTER_LOCAL',
+    0x10: 'CREATE_USER'
   };
   const logRecv = (cmd, data) =>
-    console.log(`⬇️  os_packet RECV [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
+    console.log(`⬇️  os_packet RECV [${CMD[cmd] || cmd}]`, data
+      ? JSON.stringify({ ...data, password: data.password ? '***redacted***' : undefined })
+      : '');
   const logSend = (dest, cmd, data) =>
     console.log(`⬆️  os_packet SEND → ${dest} [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
 
-  // Unified OS packet handler
-  socket.on('os_packet', (packet) => {
+  function sendPacket(sock, cmd, data) {
+    logSend(sock.id, cmd, data);
+    sock.emit('os_packet', { cmd, data });
+  }
+
+  // Unified os_packet handler
+  socket.on('os_packet', async (packet = {}) => {
     try {
       const cmd = Number(packet?.cmd);
       const data = packet?.data || {};
       if (Number.isNaN(cmd)) {
         const err = { cmd: 0x0C, data: { error: 'Missing cmd' } }; // BAD_DATA
-        logSend(socket.id, err.cmd, err.data);
-        socket.emit('os_packet', err);
+        sendPacket(socket, err.cmd, err.data);
         return;
       }
 
       logRecv(cmd, data);
 
       switch (cmd) {
-        case 0x00: { // TEST_CONNECTION
-          const reply = { cmd: 0x01 }; // CONNECTION_ESTABLISHED
-          logSend(socket.id, reply.cmd, reply.data);
-          socket.emit('os_packet', reply);
+        /** TEST_CONNECTION -> CONNECTION_ESTABLISHED */
+        case 0x00: {
+          sendPacket(socket, 0x01); // CONNECTION_ESTABLISHED
           break;
         }
 
-        case 0x02: { // VALIDATE_USER
-          // Accept any non-empty username and password for now
-          const { username, email, password } = data || {};
-          const idLike = (username || email || '').trim();
-          const passOk = typeof password === 'string' && password.trim().length > 0;
-          if (idLike && passOk) {
-            const ok = { cmd: 0x03, data: { userId: idLike } }; // USER_VALID
-            logSend(socket.id, ok.cmd, ok.data);
-            socket.emit('os_packet', ok);
-          } else {
-            const no = { cmd: 0x04, data: { error: 'Invalid credentials (empty)' } }; // USER_INVALID
-            logSend(socket.id, no.cmd, no.data);
-            socket.emit('os_packet', no);
+        /** VALIDATE_USER (username only) */
+        case 0x02: {
+          try {
+            if (!canAttemptLogin(socket.id)) {
+              return sendPacket(socket, 0x04, { error: 'Invalid credentials' });
+            }
+
+            const usernameIn = (data?.username || '').trim();
+            const password = (data?.password || '').trim();
+            if (!usernameIn || !password) {
+              return sendPacket(socket, 0x04, { error: 'Invalid credentials' });
+            }
+
+            if (!OS_USERS_TABLE) {
+              console.error('❌ OS_USERS_TABLE not set; refusing login.');
+              return sendPacket(socket, 0x04, { error: 'Invalid credentials' });
+            }
+
+            const username = norm(usernameIn);
+            const getRes = await doc.send(new GetCommand({
+              TableName: OS_USERS_TABLE,
+              Key: { username }
+            }));
+            const user = getRes.Item;
+            if (!user || !user.passwordHash) {
+              noteBadLogin(socket.id);
+              return sendPacket(socket, 0x04, { error: 'Invalid credentials' });
+            }
+
+            const ok = await bcrypt.compare(password, user.passwordHash);
+            if (!ok) {
+              noteBadLogin(socket.id);
+              return sendPacket(socket, 0x04, { error: 'Invalid credentials' });
+            }
+
+            // Success
+            sendPacket(socket, 0x03, { userId: user.username, displayName: user.displayName || user.username });
+          } catch (err) {
+            console.error('Login error:', err);
+            sendPacket(socket, 0x04, { error: 'Invalid credentials' });
           }
           break;
         }
 
-        case 0x0E: { // REGISTER_LOCAL (local client -> server)
-          const { originStoryUserId } = data;
+        /** CREATE_USER (sign-up) -> USER_VALID on success */
+        case 0x10: {
+          try {
+            if (!OS_USERS_TABLE) {
+              console.error('❌ OS_USERS_TABLE not set; refusing sign-up.');
+              return sendPacket(socket, 0x04, { error: 'Sign-up unavailable' });
+            }
+
+            const usernameIn = (data?.username || '').trim();
+            const emailIn = (data?.email || '').trim();
+            const password = (data?.password || '').trim();
+            const deviceId = (data?.deviceId || '').trim(); // optional
+            const nowIso = new Date().toISOString();
+
+            if (!usernameIn || !emailIn || password.length < 8) {
+              return sendPacket(socket, 0x04, { error: 'Invalid sign-up data' });
+            }
+
+            const username = norm(usernameIn);
+            const email = norm(emailIn);
+
+            // Ensure username not taken
+            const existing = await doc.send(new GetCommand({
+              TableName: OS_USERS_TABLE,
+              Key: { username }
+            }));
+            if (existing.Item) {
+              return sendPacket(socket, 0x04, { error: 'Username already exists' });
+            }
+
+            const passwordHash = await bcrypt.hash(password, 10);
+            const item = {
+              username,
+              passwordHash,
+              email,
+              deviceId,
+              createdAt: nowIso,
+              lastUpdatedAt: nowIso
+            };
+
+            await doc.send(new PutCommand({
+              TableName: OS_USERS_TABLE,
+              Item: item,
+              ConditionExpression: 'attribute_not_exists(username)'
+            }));
+
+            // Auto-login UX after creation
+            sendPacket(socket, 0x03, { userId: username, displayName: username });
+          } catch (err) {
+            console.error('Sign-up error:', err);
+            sendPacket(socket, 0x04, { error: 'Sign-up failed' });
+          }
+          break;
+        }
+
+        /** REGISTER_LOCAL: local client introduces itself */
+        case 0x0E: {
+          const { originStoryUserId } = data || {};
           if (!originStoryUserId) {
-            const err = { cmd: 0x0C, data: { error: 'Missing originStoryUserId' } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: 'Missing originStoryUserId' }); // BAD_DATA
           }
           global.osUserToLocalSocket.set(originStoryUserId, socket.id);
           console.log(`🔗 Local client registered: ${originStoryUserId} -> ${socket.id}`);
-          const ack = { cmd: 0x01, data: { message: 'local_registered' } };
-          logSend(socket.id, ack.cmd, ack.data);
-          socket.emit('os_packet', ack);
+          sendPacket(socket, 0x01, { message: 'local_registered' }); // CONNECTION_ESTABLISHED (ack)
           break;
         }
 
-        case 0x0D: { // MEETING_INFO (zoom app -> server)
-          const { meetingId, originStoryUserId, userName } = data;
+        /** MEETING_INFO: zoom app joins meeting room */
+        case 0x0D: {
+          const { meetingId, originStoryUserId, userName } = data || {};
           if (!meetingId || !originStoryUserId) {
-            const err = { cmd: 0x0C, data: { error: 'Missing meetingId/originStoryUserId' } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: 'Missing meetingId/originStoryUserId' });
           }
 
           console.log(`📌 [OS] MEETING_INFO: ${originStoryUserId} joined ${meetingId}`);
@@ -246,20 +361,16 @@ io.on('connection', (socket) => {
           break;
         }
 
-        case 0x08: { // DATA_TRANSMISSION (local client -> server)
-          const { meetingId, originStoryUserId, authentication, timestamp } = data;
+        /** DATA_TRANSMISSION: local client -> server -> room */
+        case 0x08: {
+          const { meetingId, originStoryUserId, authentication, timestamp } = data || {};
           if (!meetingId || !originStoryUserId || typeof authentication === 'undefined') {
-            const err = { cmd: 0x0C, data: { error: 'Missing meetingId/originStoryUserId/authentication' } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: 'Missing meetingId/originStoryUserId/authentication' });
           }
+
           const prob = Number(authentication);
-          if (isNaN(prob) || prob < 0 || prob > 1) {
-            const err = { cmd: 0x0C, data: { error: 'authentication must be in [0,1]' } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+          if (Number.isNaN(prob) || prob < 0 || prob > 1) {
+            return sendPacket(socket, 0x0C, { error: 'authentication must be in [0,1]' });
           }
 
           if (!rooms.has(meetingId)) {
@@ -270,25 +381,20 @@ io.on('connection', (socket) => {
               logSend(`local:${localSid}`, stop.cmd, stop.data);
               io.to(localSid).emit('os_packet', stop);
             }
-            const err = { cmd: 0x0C, data: { error: `Unknown meetingId ${meetingId}` } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: `Unknown meetingId ${meetingId}` });
           }
 
           const participants = rooms.get(meetingId);
           const target = participants.find(u => u.userId === originStoryUserId);
           if (!target) {
-            const err = { cmd: 0x0C, data: { error: `User ${originStoryUserId} not in meeting ${meetingId}` } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: `User ${originStoryUserId} not in meeting ${meetingId}` });
           }
 
+          const nowIso = timestamp || new Date().toISOString();
           const latest = roomScores.get(meetingId) || {};
           latest[originStoryUserId] = {
             authentication: prob,
-            timestamp: timestamp || new Date().toISOString(),
+            timestamp: nowIso,
             userId: originStoryUserId,
             userName: target.userName
           };
@@ -298,7 +404,7 @@ io.on('connection', (socket) => {
           const histMap = global.authHistory.get(meetingId);
           if (!histMap.has(originStoryUserId)) histMap.set(originStoryUserId, []);
           const arr = histMap.get(originStoryUserId);
-          arr.push({ authentication: prob, timestamp: timestamp || new Date().toISOString() });
+          arr.push({ authentication: prob, timestamp: nowIso });
           while (arr.length > 5) arr.shift();
 
           const out = {
@@ -308,7 +414,7 @@ io.on('connection', (socket) => {
               userId: originStoryUserId,
               userName: target.userName,
               authentication: prob,
-              timestamp: timestamp || new Date().toISOString()
+              timestamp: nowIso
             }
           };
           logSend(`room:${meetingId}`, out.cmd, out.data);
@@ -316,13 +422,11 @@ io.on('connection', (socket) => {
           break;
         }
 
-        case 0x09: { // END_DATA (Zoom app -> Server -> Local client)
+        /** END_DATA: Zoom app asks local client to stop */
+        case 0x09: {
           const { meetingId, originStoryUserId } = data || {};
           if (!originStoryUserId) {
-            const err = { cmd: 0x0C, data: { error: 'Missing originStoryUserId' } };
-            logSend(socket.id, err.cmd, err.data);
-            socket.emit('os_packet', err);
-            return;
+            return sendPacket(socket, 0x0C, { error: 'Missing originStoryUserId' });
           }
           const localSid = global.osUserToLocalSocket?.get(originStoryUserId);
           if (localSid) {
@@ -337,15 +441,12 @@ io.on('connection', (socket) => {
 
         default: {
           const err = { cmd: 0x0B, data: { error: `Unknown command ${cmd}` } }; // BAD_COMMAND
-          logSend(socket.id, err.cmd, err.data);
-          socket.emit('os_packet', err);
+          sendPacket(socket, err.cmd, err.data);
         }
       }
     } catch (err) {
       console.error('Error handling os_packet:', err);
-      const e = { cmd: 0x0C, data: { error: 'Server error processing packet' } }; // BAD_DATA
-      logSend(socket.id, e.cmd, e.data);
-      socket.emit('os_packet', e);
+      sendPacket(socket, 0x0C, { error: 'Server error processing packet' }); // BAD_DATA
     }
   });
 
@@ -405,18 +506,18 @@ io.on('connection', (socket) => {
   });
 });
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 404 handler
+// 404
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// Start the server
+// Start server
 server.listen(port, () => {
   console.log(`🚀 Zoom App server running on http://localhost:${port}`);
   console.log('🔌 Socket.IO server ready for WebSocket connections');

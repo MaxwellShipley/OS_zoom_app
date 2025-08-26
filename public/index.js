@@ -1,187 +1,276 @@
-// public/index.js — Glass Panels UI + Dark toggle already in index.html
-// Keeps your existing protocol + login flow + END_DATA on leave.
-
+// Zoom App UI + OS protocol wiring (Login / Signup split screens)
+let isConfigured = false;
 let socket = null;
+let serverStatus = 'Disconnected'; // "Connected" | "Disconnected"
 let currentMeetingId = null;
-let originStoryUserId = null;   // set after login
 let currentUserName = null;
+let originStoryUserId = null;
 let isConnectedToRoom = false;
 
-let participantList = [];
-let participantScores = new Map();
-
+// Packet log helpers
 const CMD = {
   0x00: 'TEST_CONNECTION',
   0x01: 'CONNECTION_ESTABLISHED',
   0x02: 'VALIDATE_USER',
   0x03: 'USER_VALID',
   0x04: 'USER_INVALID',
-  0x05: 'UPDATE_USER',
-  0x06: 'USER_UPDATED',
-  0x07: 'BEGIN_DATA',
   0x08: 'DATA_TRANSMISSION',
   0x09: 'END_DATA',
-  0x0A: 'END_CONNECTION',
-  0x0B: 'BAD_COMMAND',
-  0x0C: 'BAD_DATA',
   0x0D: 'MEETING_INFO',
-  0x0E: 'REGISTER_LOCAL'
+  0x0E: 'REGISTER_LOCAL',
+  0x10: 'CREATE_USER'
 };
-const logRecv = (cmd, data) =>
+
+function logRecv(cmd, data) {
   console.log(`⬇️  os_packet RECV [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
-const logSend = (dest, cmd, data) =>
+}
+function logSend(dest, cmd, data) {
   console.log(`⬆️  os_packet SEND → ${dest} [${CMD[cmd] || cmd}]`, data ? JSON.stringify(data) : '');
+}
 
-// ---------- UI (Glass) ----------
+// Simple toast/dropdown notifications (no external CSS)
+function showToast(type, message) {
+  // type: 'success' | 'error' | 'info'
+  const existing = document.getElementById('toast-container');
+  const container = existing || (() => {
+    const c = document.createElement('div');
+    c.id = 'toast-container';
+    c.style.position = 'fixed';
+    c.style.top = '56px';
+    c.style.right = '16px';
+    c.style.zIndex = '9999';
+    c.style.display = 'flex';
+    c.style.flexDirection = 'column';
+    c.style.gap = '8px';
+    document.body.appendChild(c);
+    return c;
+  })();
 
-function renderLogin(disabled = true, serverStatus = 'Initializing…') {
+  const bg = type === 'success' ? '#16a34a' : type === 'error' ? '#dc2626' : '#334155';
+  const el = document.createElement('div');
+  el.textContent = message;
+  el.style.padding = '10px 12px';
+  el.style.borderRadius = '10px';
+  el.style.color = '#fff';
+  el.style.background = bg;
+  el.style.boxShadow = '0 6px 24px rgba(0,0,0,.25)';
+  el.style.fontWeight = '600';
+  el.style.maxWidth = '320px';
+  el.style.transition = 'transform .25s ease, opacity .25s ease';
+  el.style.transform = 'translateY(-8px)';
+  el.style.opacity = '0';
+
+  container.appendChild(el);
+  requestAnimationFrame(() => {
+    el.style.transform = 'translateY(0)';
+    el.style.opacity = '1';
+  });
+
+  setTimeout(() => {
+    el.style.transform = 'translateY(-8px)';
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 250);
+  }, 2800);
+}
+
+
+// Simple app state for participants & probabilities
+let participantList = [];
+let participantScores = new Map();
+
+// ---------- DOM helpers ----------
+function setHeaderConnection(status) {
+  serverStatus = status;
+  const el = document.getElementById('connection-status');
+  if (!el) return;
+  el.className = `status ${status === 'Connected' ? 'status--connected' : 'status--disconnected'}`;
+  el.textContent = status === 'Connected' ? 'connected to server' : 'disconnected';
+}
+
+function mountRoot(html) {
   const root = document.getElementById('participant-list');
-  root.innerHTML = `
+  if (root) root.innerHTML = html;
+}
+
+// ---------- Screens ----------
+function renderLogin(disabled = false, msg = '') {
+  // Update header badge
+  setHeaderConnection(serverStatus);
+
+  mountRoot(`
     <div class="glass login">
       <h2>Welcome back</h2>
-      <p>Sign in with your OriginStory account to join your meeting.</p>
+      <p>Sign in with your OriginStory username.</p>
 
       <div class="field">
-        <label class="label" for="os-username">Email or Username</label>
-        <input class="input" id="os-username" type="text" placeholder="you@example.com" ${disabled ? 'disabled' : ''} />
+        <label class="label" for="os-username">Username</label>
+        <input class="input" id="os-username" type="text" placeholder="yourusername" ${disabled ? 'disabled' : ''} />
       </div>
       <div class="field">
         <label class="label" for="os-password">Password</label>
         <input class="input" id="os-password" type="password" placeholder="••••••••" ${disabled ? 'disabled' : ''} />
       </div>
 
-      <div class="row" style="margin-top:10px;">
+      <div class="row" style="margin-top:10px; gap:8px;">
         <button id="os-login-btn" class="btn" ${disabled ? 'disabled' : ''}>Sign In</button>
-        <div id="connection-status" class="status ${serverStatus === 'Connected' ? 'status--connected' : 'status--disconnected'}">
-          ${serverStatus === 'Connected' ? 'Connected' : 'Disconnected'}
-        </div>
+        <button id="os-go-signup" class="btn" style="background:#64748b;" ${disabled ? 'disabled' : ''}>Create account</button>
       </div>
 
-      <div id="os-login-msg" style="min-height:20px;color:var(--muted);margin-top:8px;"></div>
+      <div id="os-login-msg" style="min-height:20px;color:var(--muted);margin-top:8px;">${msg || ''}</div>
     </div>
-  `;
+  `);
 
   document.getElementById('os-login-btn')?.addEventListener('click', onLoginSubmit);
-  document.getElementById('os-password')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') onLoginSubmit();
-  });
+  document.getElementById('os-password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') onLoginSubmit(); });
+  document.getElementById('os-go-signup')?.addEventListener('click', () => renderSignup(false, ''));
 }
 
-function renderParticipants() {
-  const root = document.getElementById('participant-list');
+function renderSignup(disabled = false) {
+  setHeaderConnection(serverStatus);
 
-  if (!participantList.length) {
-    root.innerHTML = `
-      <div class="glass panel">
-        <div class="panel-header">
-          <div class="panel-title">Participants (0)</div>
-          <div class="meta">Waiting for participants…</div>
-        </div>
-        <div class="loading" style="padding:10px 0;">No participants connected yet.</div>
-      </div>`;
-    return;
-  }
+  mountRoot(`
+    <div class="glass login">
+      <h2>Create account</h2>
+      <p>Sign up to use OriginStory in your meetings.</p>
 
-  root.innerHTML = `
-    <div class="glass panel">
-      <div class="panel-header">
-        <div class="panel-title">Participants (${participantList.length})</div>
-        <div class="meta">Connected • ${shortId(currentMeetingId)}</div>
+      <div class="field">
+        <label class="label" for="os-su-username">Username</label>
+        <input class="input" id="os-su-username" type="text" placeholder="newusername" ${disabled ? 'disabled' : ''} />
       </div>
-      <div id="participants-container" class="list"></div>
+
+      <div class="field">
+        <label class="label" for="os-su-email">Email</label>
+        <input class="input" id="os-su-email" type="email" placeholder="you@example.com" ${disabled ? 'disabled' : ''} />
+      </div>
+
+      <div class="field">
+        <label class="label" for="os-su-email2">Confirm email</label>
+        <input class="input" id="os-su-email2" type="email" placeholder="you@example.com" ${disabled ? 'disabled' : ''} />
+        <div id="email-match-hint" style="font-size:12px;margin-top:6px;height:16px;"></div>
+      </div>
+
+      <div class="field">
+        <label class="label" for="os-su-password">Password (min 8 chars)</label>
+        <input class="input" id="os-su-password" type="password" placeholder="••••••••" ${disabled ? 'disabled' : ''} />
+      </div>
+
+      <div class="row" style="margin-top:10px; gap:8px;">
+        <button id="os-create-btn" class="btn" ${disabled ? 'disabled' : ''}>Create</button>
+        <button id="os-cancel" class="btn" style="background:#6b7280;" ${disabled ? 'disabled' : ''}>Back to sign in</button>
+      </div>
     </div>
-  `;
+  `);
 
-  const container = document.getElementById('participants-container');
-  participantList.forEach((p) => {
-    const prob = participantScores.get(p.userId)?.authentication;
-    const probText = (typeof prob === 'number') ? prob.toFixed(3) : '—';
-    const tier = (typeof prob === 'number')
-      ? (prob >= 0.7 ? 'high' : prob >= 0.3 ? 'med' : 'low')
-      : 'med';
+  const email1 = document.getElementById('os-su-email');
+  const email2 = document.getElementById('os-su-email2');
+  const hint = document.getElementById('email-match-hint');
 
-    const row = document.createElement('div');
-    row.className = 'row-item';
-    row.setAttribute('data-user-id', p.userId);
-    row.innerHTML = `
-      <div class="user">
-        <div class="name">${escapeHtml(p.userName || 'Unknown')}</div>
-        ${p.userId === originStoryUserId ? '<div class="you">You</div>' : ''}
-        <div class="userid">${escapeHtml(p.userId)}</div>
-      </div>
-      <div class="prob" data-v="${tier}"><span>${probText}</span></div>
-    `;
-    container.appendChild(row);
-  });
-}
-
-function updateParticipantProbability(userId, pd) {
-  const el = document.querySelector(`[data-user-id="${CSS.escape(userId)}"] .prob span`);
-  if (el) {
-    const probText = (typeof pd.authentication === 'number') ? pd.authentication.toFixed(3) : '—';
-    el.textContent = probText;
-    const pill = el.closest('.prob');
-    if (pill) {
-      const v = pd.authentication;
-      pill.setAttribute('data-v', (typeof v === 'number') ? (v >= 0.85 ? 'high' : v >= 0.5 ? 'med' : 'low') : 'med');
-      // subtle pulse
-      pill.classList.remove('prob--updated');
-      // force reflow to restart animation if you later add it
-      void pill.offsetWidth;
-      pill.classList.add('prob--updated');
+  function updateEmailMatchHint() {
+    const e1 = (email1?.value || '').trim().toLowerCase();
+    const e2 = (email2?.value || '').trim().toLowerCase();
+    if (!e1 && !e2) { if (hint) hint.textContent = ''; return; }
+    if (e1 && e2 && e1 === e2) {
+      if (hint) { hint.textContent = 'Emails match'; hint.style.color = '#16a34a'; }
+      email2?.style && (email2.style.borderColor = '#16a34a');
+    } else {
+      if (hint) { hint.textContent = 'Emails do not match'; hint.style.color = '#dc2626'; }
+      email2?.style && (email2.style.borderColor = '#dc2626');
     }
   }
+  email1?.addEventListener('input', updateEmailMatchHint);
+  email2?.addEventListener('input', updateEmailMatchHint);
+
+  document.getElementById('os-create-btn')?.addEventListener('click', onCreateAccountSubmit);
+  document.getElementById('os-su-password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') onCreateAccountSubmit(); });
+  document.getElementById('os-cancel')?.addEventListener('click', () => renderLogin(false, ''));
 }
 
-function displayError(message) {
-  const root = document.getElementById('participant-list');
-  root.innerHTML = `
-    <div class="glass panel">
-      <div class="panel-header"><div class="panel-title">Error</div></div>
-      <div class="error">${message}</div>
-    </div>`;
+
+function renderParticipants() {
+  setHeaderConnection(serverStatus);
+
+  const items = participantList.map((p) => {
+    const latest = participantScores.get(p.userId);
+    let tier = 'low', val = '—';
+    if (latest && typeof latest.authentication === 'number') {
+      const a = latest.authentication;
+      tier = a >= 0.67 ? 'high' : a >= 0.34 ? 'med' : 'low';
+      val = `${Math.round(a * 100)}%`;
+    }
+    const you = (p.userId === originStoryUserId) ? `<span class="chip-you">You</span>` : '';
+    return `
+      <div class="participant-item" data-user-id="${p.userId}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <div><strong>${p.userName || p.userId}</strong> ${you}</div>
+          <div class="participant-score"><span class="prob" data-v="${tier}"><span>${val}</span></span></div>
+        </div>
+      </div>`;
+  }).join('');
+
+  mountRoot(`
+    <div class="glass panel" style="padding:18px 16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+        <h2 style="margin:0;">Meeting Participants (${participantList.length})</h2>
+      </div>
+      <div id="participants-container">
+        ${items || '<div class="empty-state">Waiting for participants…</div>'}
+      </div>
+    </div>
+  `);
 }
 
-function shortId(id) {
-  if (!id || typeof id !== 'string') return '';
-  return id.length > 14 ? `${id.slice(0, 8)}…` : id;
-}
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// ---------- Login submit ----------
-
+// ---------- Auth actions ----------
 function onLoginSubmit() {
-  const username = (document.getElementById('os-username')?.value || '').trim();
-  const password = (document.getElementById('os-password')?.value || '').trim();
+  const u = (document.getElementById('os-username')?.value || '').trim();
+  const p = (document.getElementById('os-password')?.value || '').trim();
+  if (!u || !p) {
+    showToast('error', 'Enter username and password.');
+    return;
+  }
+  const pkt = { cmd: 0x02, data: { username: u, password: p } };
+  logSend('server', pkt.cmd, { ...pkt.data, password: '***redacted***' });
+  socket.emit('os_packet', pkt);
+  window.__authFlow = 'login';
+}
 
-  const msg = document.getElementById('os-login-msg');
-  if (!username || !password) {
-    msg.textContent = 'Please enter a username/email and password.';
+
+function onCreateAccountSubmit() {
+  const u = (document.getElementById('os-su-username')?.value || '').trim();
+  const e1 = (document.getElementById('os-su-email')?.value || '').trim();
+  const e2 = (document.getElementById('os-su-email2')?.value || '').trim();
+  const p = (document.getElementById('os-su-password')?.value || '').trim();
+
+  if (!u || !e1 || !e2 || !p) {
+    showToast('error', 'Please fill out all fields.');
+    return;
+  }
+  if (e1.toLowerCase() !== e2.toLowerCase()) {
+    showToast('error', 'Emails do not match.');
+    return;
+  }
+  if (p.length < 8) {
+    showToast('error', 'Password must be at least 8 characters.');
     return;
   }
 
-  const pkt = { cmd: 0x02, data: { username, password } }; // VALIDATE_USER
-  logSend('server', pkt.cmd, pkt.data);
+  const pkt = { cmd: 0x10, data: { username: u, email: e1, password: p } };
+  logSend('server', pkt.cmd, { ...pkt.data, password: '***redacted***' });
   socket.emit('os_packet', pkt);
-  msg.textContent = 'Validating…';
+  window.__authFlow = 'signup';
 }
 
-// ---------- Socket / protocol ----------
 
+// ---------- Socket / Protocol ----------
 function initializeWebSocket() {
   if (typeof io === 'undefined') {
     console.error('socket.io not loaded');
-    renderLogin(true, 'Socket.IO not available');
     return;
   }
   socket = io();
 
   socket.on('connect', () => {
-    // Show login immediately (disabled until TEST_CONNECTION returns)
-    renderLogin(true, 'Disconnected');
+    setHeaderConnection('Disconnected'); // until server replies 0x01
     // TEST_CONNECTION (0x00)
     const pkt = { cmd: 0x00 };
     logSend('server', pkt.cmd, pkt.data);
@@ -189,104 +278,263 @@ function initializeWebSocket() {
   });
 
   socket.on('disconnect', () => {
-    renderLogin(true, 'Disconnected');
-    document.getElementById('connection-status').style.color = '#dc2626'; // red
+    setHeaderConnection('Disconnected');
   });
 
-  socket.on('current_participants', (data) => {
-    participantList = data.participants || [];
+  socket.on('os_packet', (packet = {}) => {
+    const { cmd, data } = packet;
+    logRecv(cmd, data);
+
+    switch (cmd) {
+      case 0x01: { // CONNECTION_ESTABLISHED
+        setHeaderConnection('Connected');
+        break;
+      }
+      case 0x03: { // USER_VALID
+        if (window.__authFlow === 'signup') {
+          showToast('success', 'Account created. Please sign in.');
+          renderLogin(false, '');
+          window.__authFlow = null;
+        } else {
+          showToast('success', 'Signed in successfully.');
+          originStoryUserId = data?.userId;
+          proceedToMeetingJoin();
+        }
+        break;
+      }
+      case 0x04: { // USER_INVALID
+        const msg = (data && data.error) ? data.error : (window.__authFlow === 'signup' ? 'Sign-up failed.' : 'Invalid credentials.');
+        showToast('error', msg);
+        // Stay on the current screen
+        break;
+      }
+
+      case 0x08: { // DATA_TRANSMISSION → update UI
+        const sid = data?.userId;
+        if (sid) {
+          participantScores.set(sid, {
+            authentication: data.authentication,
+            userId: sid,
+            userName: data.userName,
+            timestamp: data.timestamp
+          });
+          // update single chip if present
+          const el = document.querySelector(`[data-user-id="${sid}"] .participant-score span`);
+          if (el && typeof data.authentication === 'number') {
+            const a = data.authentication;
+            el.setAttribute('data-v', a >= 0.67 ? 'high' : a >= 0.34 ? 'med' : 'low');
+            const inner = el.querySelector('span');
+            if (inner) inner.textContent = `${Math.round(a * 100)}%`;
+          }
+        }
+        break;
+      }
+      default:
+        // ignore others here
+        break;
+    }
+  });
+
+  // Room/participants events (unchanged)
+  socket.on('current_participants', (payload) => {
+    participantList = payload?.participants || [];
     participantScores.clear();
-    Object.entries(data.scores || {}).forEach(([userId, probData]) => {
-      participantScores.set(userId, probData);
-    });
+    const scoresObj = payload?.scores || {};
+    Object.values(scoresObj).forEach((s) => participantScores.set(s.userId, s));
     renderParticipants();
   });
-
-  socket.on('os_packet', (packet) => {
-    if (!packet || typeof packet.cmd === 'undefined') return;
-    const cmd = Number(packet.cmd);
-    const d = packet.data || {};
-    logRecv(cmd, d);
-
-    if (cmd === 0x01) { // CONNECTION_ESTABLISHED
-      renderLogin(false, 'Connected');
-      document.getElementById('connection-status').style.color = '#16a34a'; // green
-      return;
-    }
-    if (cmd === 0x03) { // USER_VALID
-      const username = (document.getElementById('os-username')?.value || '').trim();
-      originStoryUserId = username; // For now, OS user id = username/email
-      const hint = document.getElementById('os-login-msg');
-      if (hint) hint.textContent = 'Login successful! Joining meeting…';
-      sendMeetingInfo();
-      return;
-    }
-    if (cmd === 0x04) { // USER_INVALID
-      const hint = document.getElementById('os-login-msg');
-      if (hint) hint.textContent = d?.error || 'Invalid credentials.';
-      return;
-    }
-    if (cmd === 0x08) { // DATA_TRANSMISSION
-      const userId = d.userId;
-      const pd = { authentication: d.authentication, timestamp: d.timestamp, userId, userName: d.userName };
-      participantScores.set(userId, pd);
-      updateParticipantProbability(userId, pd);
-      return;
-    }
-  });
-
-  socket.on('participant_joined', (data) => {
-    if (!participantList.find(p => p.userId === data.userId)) {
-      participantList.push({ userId: data.userId, userName: data.userName, joinedAt: new Date() });
+  socket.on('participant_joined', (p) => {
+    if (!participantList.find(x => x.userId === p.userId)) {
+      participantList.push({ userId: p.userId, userName: p.userName, joinedAt: new Date() });
       renderParticipants();
     }
   });
-
-  socket.on('participant_left', (data) => {
-    participantList = participantList.filter(p => p.userId !== data.userId);
-    participantScores.delete(data.userId);
+  socket.on('participant_left', (p) => {
+    participantList = participantList.filter(x => x.userId !== p.userId);
+    participantScores.delete(p.userId);
     renderParticipants();
   });
+}
 
-  socket.on('connect_error', (err) => {
-    console.error('websocket connection error:', err);
-    renderLogin(true, 'Connection error');
+// After login success → get Zoom info, join meeting, send MEETING_INFO (0x0D)
+function proceedToMeetingJoin() {
+  if (!window.zoomSdk) {
+    renderLogin(false, 'Zoom SDK not found.');
+    return;
+  }
+  window.zoomSdk.getRunningContext()
+    .then((ctx) => {
+      if (!ctx || ctx.context !== 'inMeeting') {
+        renderLogin(false, 'Open this app inside a Zoom meeting.');
+        throw new Error('Not in meeting');
+      }
+      return Promise.all([ window.zoomSdk.getMeetingUUID(), window.zoomSdk.getUserContext() ]);
+    })
+    .then(([meetingResponse, userResponse]) => {
+      currentMeetingId = meetingResponse.meetingUUID;
+      currentUserName = userResponse.screenName || originStoryUserId || 'Unknown User';
+
+      // Send MEETING_INFO (0x0D)
+      const pkt = { cmd: 0x0D, data: { meetingId: currentMeetingId, originStoryUserId, userName: currentUserName } };
+      logSend('server', pkt.cmd, pkt.data);
+      socket.emit('os_packet', pkt);
+
+      // Show participants panel
+      renderParticipants();
+    })
+    .catch((err) => {
+      console.error('Meeting join failed:', err);
+      renderLogin(false, 'Could not get meeting info.');
+    });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Emoji virtual foreground overlay (Zoom Apps SDK)
+// ─────────────────────────────────────────────────────────────
+let __emojiOverlayOn = false;
+let __emojiApplying = false;
+
+/**
+ * Creates ImageData for a simple emoji drawn on a transparent canvas.
+ * @param {string} emoji - e.g. '😀'
+ * @param {number} size  - output canvas size (square), e.g. 256
+ * @returns {ImageData}
+ */
+function makeEmojiImageData(emoji = '😀', size = 256) {
+  const canvas = document.createElement('canvas');
+  // Slightly larger backing store for sharper text
+  const SCALE = 2;
+  canvas.width = size * SCALE;
+  canvas.height = size * SCALE;
+  const ctx = canvas.getContext('2d');
+
+  // transparent background
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // draw emoji centered
+  const fontPx = Math.floor(size * 0.8) * SCALE; // big emoji
+  ctx.font = `${fontPx}px system-ui, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  const margin = 15 * SCALE;
+  ctx.fillText(emoji, canvas.width - 15, 60);
+
+
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+/**
+ * Applies the emoji overlay using Zoom SDK setVirtualForeground.
+ */
+async function applyEmojiOverlay() {
+  if (!window.zoomSdk || __emojiApplying) return;
+  __emojiApplying = true;
+  try {
+    const imageData = makeEmojiImageData('✅', 64);
+
+    // persistence: 'meeting' means it remains for this meeting session
+    await window.zoomSdk.setVirtualForeground({
+      imageData,
+      persistence: 'meeting'
+    });
+    __emojiOverlayOn = true;
+    showToast && showToast('success', 'Emoji overlay enabled');
+  } catch (e) {
+    console.error('setVirtualForeground failed:', e);
+    showToast && showToast('error', 'Could not enable overlay');
+    __emojiOverlayOn = false;
+  } finally {
+    __emojiApplying = false;
+  }
+}
+
+/**
+ * Removes the emoji overlay.
+ */
+async function removeEmojiOverlay() {
+  if (!window.zoomSdk || __emojiApplying) return;
+  __emojiApplying = true;
+  try {
+    await window.zoomSdk.removeVirtualForeground();
+    __emojiOverlayOn = false;
+    showToast && showToast('success', 'Emoji overlay disabled');
+  } catch (e) {
+    console.error('removeVirtualForeground failed:', e);
+    showToast && showToast('error', 'Could not disable overlay');
+  } finally {
+    __emojiApplying = false;
+  }
+}
+
+/**
+ * Creates a floating toggle button that works across screens.
+ */
+function setupEmojiOverlayToggle() {
+  // Avoid duplicates
+  if (document.getElementById('emoji-toggle-btn')) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'emoji-toggle-btn';
+  btn.type = 'button';
+  btn.textContent = '😀 Overlay: OFF';
+  Object.assign(btn.style, {
+    position: 'fixed',
+    right: '16px',
+    bottom: '16px',
+    zIndex: 9998,
+    padding: '10px 12px',
+    borderRadius: '999px',
+    border: 'none',
+    fontWeight: '600',
+    cursor: 'pointer',
+    boxShadow: '0 8px 24px rgba(0,0,0,.2)',
+    background: 'var(--brand, #6c5ce7)',
+    color: '#fff'
   });
-}
 
-function sendMeetingInfo() {
-  if (!socket || !currentMeetingId || !originStoryUserId) return;
-
-  const pkt = {
-    cmd: 0x0D, // MEETING_INFO
-    data: {
-      meetingId: currentMeetingId,
-      originStoryUserId,
-      userName: currentUserName || 'Unknown User'
+  btn.addEventListener('click', async () => {
+    if (!window.zoomSdk) {
+      showToast && showToast('error', 'Zoom SDK not available');
+      return;
     }
-  };
-  logSend('server', pkt.cmd, pkt.data);
-  socket.emit('os_packet', pkt);
-  isConnectedToRoom = true;
+    try {
+      const ctx = await window.zoomSdk.getRunningContext();
+      if (!ctx || ctx.context !== 'inMeeting') {
+        showToast && showToast('error', 'Open inside a Zoom meeting to use overlay');
+        return;
+      }
+    } catch {
+      // best effort; continue
+    }
+
+    if (__emojiOverlayOn) {
+      await removeEmojiOverlay();
+      btn.textContent = '😀 Overlay: OFF';
+    } else {
+      await applyEmojiOverlay();
+      btn.textContent = '😀 Overlay: ON';
+    }
+  });
+
+  document.body.appendChild(btn);
+
+  // Dark mode awareness (optional): invert the brand a bit for contrast
+  const observer = new MutationObserver(() => {
+    const isDark = document.documentElement.classList.contains('dark');
+    btn.style.background = isDark ? '#7c3aed' : '#6c5ce7';
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 }
 
-function sendEndData() {
-  if (!socket || !originStoryUserId) return;
-  const pkt = { cmd: 0x09, data: { meetingId: currentMeetingId || null, originStoryUserId } };
-  logSend('server', pkt.cmd, pkt.data);
-  try { socket.emit('os_packet', pkt); } catch(e) { /* ignore */ }
-}
-
-// Fire END DATA when the app is going away or becoming hidden
-window.addEventListener('beforeunload', () => { sendEndData(); });
-window.addEventListener('pagehide', () => { sendEndData(); });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sendEndData(); });
-
-// ---------- Zoom SDK init ----------
-
+// ---------- Init ----------
 function initApp() {
   if (!window.zoomSdk) {
-    displayError('Zoom SDK Not Found. Make sure appssdk.zoom.us is in your allowed domains.');
+    mountRoot(`
+      <div class="error">
+        <h2>Zoom SDK Not Found</h2>
+        <p>Make sure appssdk.zoom.us is in your allowed domains.</p>
+      </div>
+    `);
     return;
   }
 
@@ -298,40 +546,22 @@ function initApp() {
       'getUserContext',
       'getMeetingUUID',
       'showNotification',
-      'onMeeting'
+      'setVirtualForeground',
+      'removeVirtualForeground'
     ]
   })
-  .then(() => window.zoomSdk.getRunningContext())
-  .then((ctx) => {
-    if (!ctx || ctx.context !== 'inMeeting') {
-      displayError(`<strong>📵 Not in Meeting</strong><br>Current context: ${ctx ? ctx.context : 'unknown'}`);
-      throw new Error('Not in meeting');
-    }
-    return Promise.all([ window.zoomSdk.getMeetingUUID(), window.zoomSdk.getUserContext() ]);
-  })
-  .then(([meetingResponse, userResponse]) => {
-    currentMeetingId = meetingResponse.meetingUUID;
-    currentUserName = userResponse.screenName || 'Unknown User';
-
-    // Render login shell; socket will enable it after TEST_CONNECTION
-    renderLogin(true, 'Initializing…');
-
+  .then(() => {
+    isConfigured = true;
+    // Render login first (header badge will update as socket connects)
+    renderLogin(false, '');
     initializeWebSocket();
 
-    // Optional: watch meeting end/leave to send END_DATA
-    if (window.zoomSdk?.onMeeting) {
-      window.zoomSdk.onMeeting((evt) => {
-        const payload = evt || {};
-        const state = payload.meetingState || payload.state || payload.action || payload.status || '';
-        if (String(state).toLowerCase().includes('end') || String(state).toLowerCase().includes('leave')) {
-          sendEndData();
-        }
-      });
-    }
+    // Set up a global emoji overlay toggle
+    setupEmojiOverlayToggle();
   })
   .catch((err) => {
-    if (err && err.message === 'Not in meeting') return;
-    displayError(`<strong>Initialization Failed:</strong> ${err.message || err}`);
+    console.error('SDK config failed:', err);
+    mountRoot(`<div class="error"><h2>Initialization Failed</h2><p>${err?.message || err}</p></div>`);
   });
 }
 
