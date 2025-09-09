@@ -190,34 +190,35 @@ function renderParticipants() {
   setHeaderConnection(serverStatus);
 
   const items = participantList.map((p) => {
-    const latest = participantScores.get(p.userId);
-    let tier = 'low', val = '—';
-    if (latest && typeof latest.authentication === 'number') {
-      const a = latest.authentication;
-      tier = a >= 0.67 ? 'high' : a >= 0.34 ? 'med' : 'low';
-      val = `${Math.round(a * 100)}%`;
-    }
-    const you = (p.userId === originStoryUserId) ? `<span class="chip-you">You</span>` : '';
+    const s = participantScores.get(p.userId);
+    const v1 = s && typeof s.prob_1 === 'number' ? Math.round(s.prob_1 * 100) : null;
+    const v2 = s && typeof s.prob_2 === 'number' ? Math.round(s.prob_2 * 100) : null;
+    const tier = (x) => (x >= 67 ? 'high' : x >= 34 ? 'med' : 'low');
+    const you = (p.userId === originStoryUserId) ? `<span class="you">You</span>` : '';
+
     return `
-      <div class="participant-item" data-user-id="${p.userId}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-          <div><strong>${p.userName || p.userId}</strong> ${you}</div>
-          <div class="participant-score"><span class="prob" data-v="${tier}"><span>${val}</span></span></div>
+      <div class="row-item" data-user-id="${p.userId}">
+        <div class="user">
+          <div class="name">${p.userName || p.userId}</div> ${you}
         </div>
-      </div>`;
+        <div class="participant-score">
+          <span class="prob" data-v="${v1 != null ? tier(v1) : 'low'}"><span>${v1 != null ? v1 + '%' : '—'}</span></span>
+          <span style="margin-left:6px" class="prob" data-v="${v2 != null ? tier(v2) : 'low'}"><span>${v2 != null ? v2 + '%' : '—'}</span></span>
+        </div>
+      </div>
+    `;
   }).join('');
 
   mountRoot(`
     <div class="glass panel" style="padding:18px 16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+      <div class="panel-header">
         <h2 style="margin:0;">Meeting Participants (${participantList.length})</h2>
       </div>
-      <div id="participants-container">
-        ${items || '<div class="empty-state">Waiting for participants…</div>'}
-      </div>
+      <div id="participants-container">${items || '<div class="empty-state">Waiting for participants…</div>'}</div>
     </div>
   `);
 }
+
 
 
 // ---------- Auth actions ----------
@@ -309,38 +310,62 @@ function initializeWebSocket() {
         break;
       }
 
-      case 0x08: { // DATA_TRANSMISSION → update UI
-        const sid = data?.userId;
+      case 0x08: { // DATA_TRANSMISSION → update UI & overlay (prob_1 / prob_2)
+        const sid = data?.userId || data?.originStoryUserId;
         if (sid) {
-          participantScores.set(sid, {
-            authentication: data.authentication,
+          // normalize and store
+          const rec = {
             userId: sid,
             userName: data.userName,
+            prob_1: (typeof data.prob_1 === 'number') ? data.prob_1
+                    : (typeof data.authentication === 'number' ? data.authentication : undefined),
+            prob_2: (typeof data.prob_2 === 'number') ? data.prob_2 : undefined,
             timestamp: data.timestamp
-          });
-          // update single chip if present
-          const el = document.querySelector(`[data-user-id="${sid}"] .participant-score span`);
-          if (el && typeof data.authentication === 'number') {
-            const a = data.authentication;
-            el.setAttribute('data-v', a >= 0.67 ? 'high' : a >= 0.34 ? 'med' : 'low');
-            const inner = el.querySelector('span');
-            if (inner) inner.textContent = `${Math.round(a * 100)}%`;
+          };
+          participantScores.set(sid, rec);
+
+          // Update inline chips if present
+          const el = document.querySelector(`[data-user-id="${sid}"] .participant-score`);
+          if (el) {
+            const v1 = typeof rec.prob_1 === 'number' ? Math.round(rec.prob_1 * 100) : null;
+            const v2 = typeof rec.prob_2 === 'number' ? Math.round(rec.prob_2 * 100) : null;
+            const tier = (x) => (x >= 67 ? 'high' : x >= 34 ? 'med' : 'low');
+
+            el.innerHTML = `
+              <span class="prob" data-v="${v1 != null ? tier(v1) : 'low'}"><span>${v1 != null ? v1 + '%' : '—'}</span></span>
+              <span style="margin-left:6px" class="prob" data-v="${v2 != null ? tier(v2) : 'low'}"><span>${v2 != null ? v2 + '%' : '—'}</span></span>
+            `;
+          }
+
+          // Drive image overlay from prob_1 for self
+          if (sid === originStoryUserId && typeof rec.prob_1 === 'number') {
+            updateOverlayByProb1(rec.prob_1);
           }
         }
         break;
       }
+
       default:
         // ignore others here
         break;
     }
   });
 
-  // Room/participants events (unchanged)
+  // Room/participants events
   socket.on('current_participants', (payload) => {
     participantList = payload?.participants || [];
     participantScores.clear();
     const scoresObj = payload?.scores || {};
-    Object.values(scoresObj).forEach((s) => participantScores.set(s.userId, s));
+    Object.values(scoresObj).forEach((s) => {
+      participantScores.set(s.userId, {
+        userId: s.userId,
+        userName: s.userName,
+        prob_1: (typeof s.prob_1 === 'number') ? s.prob_1
+                : (typeof s.authentication === 'number' ? s.authentication : undefined),
+        prob_2: (typeof s.prob_2 === 'number') ? s.prob_2 : undefined,
+        timestamp: s.timestamp
+      });
+    });
     renderParticipants();
   });
   socket.on('participant_joined', (p) => {
@@ -389,88 +414,111 @@ function proceedToMeetingJoin() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Emoji virtual foreground overlay (Zoom Apps SDK)
+// Image-based virtual foreground overlay (prob_1-driven)
 // ─────────────────────────────────────────────────────────────
-let __emojiOverlayOn = false;
-let __emojiApplying = false;
+const OVERLAY_THRESHOLD = 0.70;                // ✔️ if prob_1 >= 0.70, otherwise ❌
+const OVERLAY_CHECK_URL = 'overlay/check.png'; // place in public/overlay/check.png
+const OVERLAY_X_URL     = 'overlay/x.png';     // place in public/overlay/x.png
 
-/**
- * Creates ImageData for a simple emoji drawn on a transparent canvas.
- * @param {string} emoji - e.g. '😀'
- * @param {number} size  - output canvas size (square), e.g. 256
- * @returns {ImageData}
- */
-function makeEmojiImageData(emoji = '😀', size = 256) {
-  const canvas = document.createElement('canvas');
-  // Slightly larger backing store for sharper text
+let __overlayOn = false;
+let __overlayApplying = false;
+let __overlayLastKind = null;             // 'check' | 'x'
+let __overlayLastAt = 0;
+const OVERLAY_MIN_INTERVAL_MS = 700;
+
+let __imgCheck = null;
+let __imgX = null;
+let __overlayAssetsReady = false;
+
+function preloadOverlayImages() {
+  const load = (src) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = (e) => reject(e);
+    img.src = src;
+  });
+
+  return Promise.all([
+    load(OVERLAY_CHECK_URL),
+    load(OVERLAY_X_URL),
+  ]).then(([ok, no]) => {
+    __imgCheck = ok;
+    __imgX = no;
+    __overlayAssetsReady = true;
+  }).catch(err => {
+    console.error('Overlay images failed to load:', err);
+    __overlayAssetsReady = false;
+  });
+}
+
+function makeImageDataFromImg(img, size = 64) {
   const SCALE = 2;
+  const canvas = document.createElement('canvas');
   canvas.width = size * SCALE;
   canvas.height = size * SCALE;
   const ctx = canvas.getContext('2d');
 
-  // transparent background
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // draw emoji centered
-  const fontPx = Math.floor(size * 0.8) * SCALE; // big emoji
-  ctx.font = `${fontPx}px system-ui, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif`;
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  const margin = 15 * SCALE;
-  ctx.fillText(emoji, canvas.width - 15, 60);
+  const icon = Math.floor(size * 0.9) * SCALE;
+  const margin = 8 * SCALE;
+  const x = canvas.width - icon - margin; // top-right
+  const y = margin;
 
+  ctx.drawImage(img, x, y, icon, icon);
 
   return ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
 
-/**
- * Applies the emoji overlay using Zoom SDK setVirtualForeground.
- */
-async function applyEmojiOverlay() {
-  if (!window.zoomSdk || __emojiApplying) return;
-  __emojiApplying = true;
+async function setOverlayKind(kind /* 'check' | 'x' */) {
+  if (!window.zoomSdk || __overlayApplying || !__overlayAssetsReady) return;
+  __overlayApplying = true;
   try {
-    const imageData = makeEmojiImageData('✅', 64);
-
-    // persistence: 'meeting' means it remains for this meeting session
-    await window.zoomSdk.setVirtualForeground({
-      imageData,
-      persistence: 'meeting'
-    });
-    __emojiOverlayOn = true;
-    showToast && showToast('success', 'Emoji overlay enabled');
+    const img = (kind === 'check') ? __imgCheck : __imgX;
+    const imageData = makeImageDataFromImg(img, 64);
+    await window.zoomSdk.setVirtualForeground({ imageData, persistence: 'meeting' });
+    __overlayOn = true;
   } catch (e) {
     console.error('setVirtualForeground failed:', e);
-    showToast && showToast('error', 'Could not enable overlay');
-    __emojiOverlayOn = false;
+    showToast && showToast('error', 'Could not enable/update overlay');
   } finally {
-    __emojiApplying = false;
+    __overlayApplying = false;
   }
 }
 
-/**
- * Removes the emoji overlay.
- */
-async function removeEmojiOverlay() {
-  if (!window.zoomSdk || __emojiApplying) return;
-  __emojiApplying = true;
+async function removeOverlay() {
+  if (!window.zoomSdk || __overlayApplying) return;
+  __overlayApplying = true;
   try {
     await window.zoomSdk.removeVirtualForeground();
-    __emojiOverlayOn = false;
-    showToast && showToast('success', 'Emoji overlay disabled');
+    __overlayOn = false;
+    __overlayLastKind = null;
+    showToast && showToast('success', 'Overlay disabled');
   } catch (e) {
     console.error('removeVirtualForeground failed:', e);
     showToast && showToast('error', 'Could not disable overlay');
   } finally {
-    __emojiApplying = false;
+    __overlayApplying = false;
   }
 }
 
-/**
- * Creates a floating toggle button that works across screens.
- */
-function setupEmojiOverlayToggle() {
-  // Avoid duplicates
+/** Update overlay based on prob_1 */
+async function updateOverlayByProb1(prob1) {
+  if (!__overlayOn || !__overlayAssetsReady) return;
+  const p = Number(prob1);
+  if (!isFinite(p)) return;
+
+  const kind = p >= OVERLAY_THRESHOLD ? 'check' : 'x';
+  const now = Date.now();
+  if (kind === __overlayLastKind && (now - __overlayLastAt) < OVERLAY_MIN_INTERVAL_MS) return;
+
+  await setOverlayKind(kind);
+  __overlayLastKind = kind;
+  __overlayLastAt = now;
+}
+
+/** Floating toggle button */
+function setupOverlayToggle() {
   if (document.getElementById('emoji-toggle-btn')) return;
 
   const btn = document.createElement('button');
@@ -488,7 +536,7 @@ function setupEmojiOverlayToggle() {
     fontWeight: '600',
     cursor: 'pointer',
     boxShadow: '0 8px 24px rgba(0,0,0,.2)',
-    background: 'var(--brand, #6c5ce7)',
+    background: '#6c5ce7',
     color: '#fff'
   });
 
@@ -503,22 +551,26 @@ function setupEmojiOverlayToggle() {
         showToast && showToast('error', 'Open inside a Zoom meeting to use overlay');
         return;
       }
-    } catch {
-      // best effort; continue
-    }
+    } catch {}
 
-    if (__emojiOverlayOn) {
-      await removeEmojiOverlay();
+    if (__overlayOn) {
+      await removeOverlay();
       btn.textContent = '😀 Overlay: OFF';
     } else {
-      await applyEmojiOverlay();
+      // pick initial from your current prob_1 if available
+      const mine = participantScores.get(originStoryUserId);
+      const init = (mine && typeof mine.prob_1 === 'number') ? mine.prob_1 : 1;
+      await setOverlayKind(init >= OVERLAY_THRESHOLD ? 'check' : 'x');
+      __overlayLastKind = null;
+      __overlayLastAt = 0;
       btn.textContent = '😀 Overlay: ON';
+      showToast && showToast('success', 'Overlay enabled');
     }
   });
 
   document.body.appendChild(btn);
 
-  // Dark mode awareness (optional): invert the brand a bit for contrast
+  // tiny color tweak for dark theme
   const observer = new MutationObserver(() => {
     const isDark = document.documentElement.classList.contains('dark');
     btn.style.background = isDark ? '#7c3aed' : '#6c5ce7';
@@ -550,14 +602,15 @@ function initApp() {
       'removeVirtualForeground'
     ]
   })
-  .then(() => {
+  .then(async () => {
     isConfigured = true;
     // Render login first (header badge will update as socket connects)
     renderLogin(false, '');
     initializeWebSocket();
 
-    // Set up a global emoji overlay toggle
-    setupEmojiOverlayToggle();
+    // NEW: preload overlay PNGs and set up the toggle
+    await preloadOverlayImages();
+    setupOverlayToggle();
   })
   .catch((err) => {
     console.error('SDK config failed:', err);

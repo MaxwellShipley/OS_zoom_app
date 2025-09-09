@@ -166,8 +166,10 @@ io.on('connection', (socket) => {
     0x0C: 'BAD_DATA',
     0x0D: 'MEETING_INFO',
     0x0E: 'REGISTER_LOCAL',
+    0x0F: 'UNREGISTER_LOCAL',  
     0x10: 'CREATE_USER'
   };
+
   const logRecv = (cmd, data) =>
     console.log(`⬇️  os_packet RECV [${CMD[cmd] || cmd}]`, data
       ? JSON.stringify({ ...data, password: data.password ? '***redacted***' : undefined })
@@ -179,6 +181,24 @@ io.on('connection', (socket) => {
     logSend(sock.id, cmd, data);
     sock.emit('os_packet', { cmd, data });
   }
+
+  function maybeBeginIfReady(originStoryUserId) {
+    const localSid = global.osUserToLocalSocket?.get(originStoryUserId);
+    const meetingId = global.userToMeeting?.get(originStoryUserId);
+    if (localSid && meetingId) {
+      const participants = rooms.get(meetingId) || [];
+      const p = participants.find(u => u.userId === originStoryUserId);
+      const userName = p?.userName || originStoryUserId;
+
+      // Push MEETING_INFO then BEGIN_DATA
+      const info = { cmd: 0x0D, data: { meetingId, originStoryUserId, userName } };
+      io.to(localSid).emit('os_packet', info);
+
+      const begin = { cmd: 0x07, data: { meetingId, originStoryUserId } };
+      io.to(localSid).emit('os_packet', begin);
+    }
+  }
+
 
   // Unified os_packet handler
   socket.on('os_packet', async (packet = {}) => {
@@ -307,7 +327,10 @@ io.on('connection', (socket) => {
           }
           global.osUserToLocalSocket.set(originStoryUserId, socket.id);
           console.log(`🔗 Local client registered: ${originStoryUserId} -> ${socket.id}`);
-          sendPacket(socket, 0x01, { message: 'local_registered' }); // CONNECTION_ESTABLISHED (ack)
+
+          sendPacket(socket, 0x01, { message: 'local_registered' });
+          maybeBeginIfReady(originStoryUserId);
+
           break;
         }
 
@@ -342,7 +365,7 @@ io.on('connection', (socket) => {
 
           socket.join(meetingId);
           global.userToMeeting.set(originStoryUserId, meetingId);
-
+          
           const latest = roomScores.get(meetingId) || {};
           const statePkt = {
             participants: participants.map(u => ({ userId: u.userId, userName: u.userName, joinedAt: u.joinedAt })),
@@ -356,6 +379,8 @@ io.on('connection', (socket) => {
             logSend(`local:${localSid}`, fwd.cmd, fwd.data);
             io.to(localSid).emit('os_packet', fwd);
           }
+          
+          maybeBeginIfReady(originStoryUserId);
 
           console.log(`✅ Room ${meetingId} now has ${participants.length} participants`);
           break;
@@ -363,26 +388,44 @@ io.on('connection', (socket) => {
 
         /** DATA_TRANSMISSION: local client -> server -> room */
         case 0x08: {
-          const { meetingId, originStoryUserId, authentication, timestamp } = data || {};
-          if (!meetingId || !originStoryUserId || typeof authentication === 'undefined') {
-            return sendPacket(socket, 0x0C, { error: 'Missing meetingId/originStoryUserId/authentication' });
+          const { meetingId, originStoryUserId } = data || {};
+          let { prob_1, prob_2 } = data || {};
+
+          if (!meetingId || !originStoryUserId || typeof prob_1 === 'undefined' || typeof prob_2 === 'undefined') {
+            return sendPacket(socket, 0x0C, { error: 'Missing meetingId/originStoryUserId/prob_1/prob_2' });
           }
 
-          const prob = Number(authentication);
-          if (Number.isNaN(prob) || prob < 0 || prob > 1) {
-            return sendPacket(socket, 0x0C, { error: 'authentication must be in [0,1]' });
+          prob_1 = Number(prob_1);
+          prob_2 = Number(prob_2);
+          const inRange = (n) => Number.isFinite(n) && n >= 0 && n <= 1;
+          if (!inRange(prob_1) || !inRange(prob_2)) {
+            return sendPacket(socket, 0x0C, { error: 'prob_1 and prob_2 must be in [0,1]' });
           }
+
+          // Round to 2 decimals for transport/consistency
+          const r2 = (x) => Math.round(x * 100) / 100;
+          prob_1 = r2(prob_1);
+          prob_2 = r2(prob_2);
 
           if (!rooms.has(meetingId)) {
-            // Room gone — politely ask local client to stop
+            // Room gone — politely ask local to stop
             const localSid = global.osUserToLocalSocket?.get(originStoryUserId);
             if (localSid) {
-              const stop = { cmd: 0x09, data: { meetingId, originStoryUserId } }; // END_DATA
+              const stop = { cmd: 0x09, data: { meetingId, originStoryUserId } };
               logSend(`local:${localSid}`, stop.cmd, stop.data);
               io.to(localSid).emit('os_packet', stop);
             }
             return sendPacket(socket, 0x0C, { error: `Unknown meetingId ${meetingId}` });
           }
+
+          // (Optional spoof guard) Ensure this socket is the registered local for this user
+          // See explanation below (§ Why helpful). If you want it, uncomment:
+          /*
+          const expectedLocalSid = global.osUserToLocalSocket?.get(originStoryUserId);
+          if (expectedLocalSid && expectedLocalSid !== socket.id) {
+            return sendPacket(socket, 0x0C, { error: 'Sender is not the registered local for this userId' });
+          }
+          */
 
           const participants = rooms.get(meetingId);
           const target = participants.find(u => u.userId === originStoryUserId);
@@ -390,30 +433,39 @@ io.on('connection', (socket) => {
             return sendPacket(socket, 0x0C, { error: `User ${originStoryUserId} not in meeting ${meetingId}` });
           }
 
-          const nowIso = timestamp || new Date().toISOString();
+          const nowIso = new Date().toISOString();
+
+          // Store latest per user
           const latest = roomScores.get(meetingId) || {};
           latest[originStoryUserId] = {
-            authentication: prob,
+            // Keep `authentication` for today's UI (map to prob_1)
+            authentication: prob_1,
+            prob_1,
+            prob_2,
             timestamp: nowIso,
             userId: originStoryUserId,
             userName: target.userName
           };
           roomScores.set(meetingId, latest);
 
+          // Small rolling history (unchanged logic)
           if (!global.authHistory.has(meetingId)) global.authHistory.set(meetingId, new Map());
           const histMap = global.authHistory.get(meetingId);
           if (!histMap.has(originStoryUserId)) histMap.set(originStoryUserId, []);
           const arr = histMap.get(originStoryUserId);
-          arr.push({ authentication: prob, timestamp: nowIso });
+          arr.push({ prob_1, prob_2, timestamp: nowIso });
           while (arr.length > 5) arr.shift();
 
+          // Broadcast to the room (keep `authentication` for current Zoom UI)
           const out = {
             cmd: 0x08,
             data: {
               meetingId,
               userId: originStoryUserId,
               userName: target.userName,
-              authentication: prob,
+              authentication: prob_1, // backward-compat
+              prob_1,
+              prob_2,
               timestamp: nowIso
             }
           };
@@ -421,6 +473,7 @@ io.on('connection', (socket) => {
           io.to(meetingId).emit('os_packet', out);
           break;
         }
+
 
         /** END_DATA: Zoom app asks local client to stop */
         case 0x09: {
@@ -435,6 +488,22 @@ io.on('connection', (socket) => {
             io.to(localSid).emit('os_packet', fwd);
           } else {
             console.log(`ℹ️ No local client registered for ${originStoryUserId}; END_DATA not forwarded`);
+          }
+          break;
+        }
+
+        case 0x0F: {
+          const { originStoryUserId } = data || {};
+          if (!originStoryUserId) {
+            return sendPacket(socket, 0x0C, { error: 'Missing originStoryUserId' }); // BAD_DATA
+          }
+          const sid = global.osUserToLocalSocket?.get(originStoryUserId);
+          if (sid && sid === socket.id) {
+            global.osUserToLocalSocket.delete(originStoryUserId);
+            sendPacket(socket, 0x01, { message: 'local_unregistered' }); // CONNECTION_ESTABLISHED as ack
+          } else {
+            // Either not registered, or another socket is registered
+            sendPacket(socket, 0x0C, { error: 'Not registered as local for this userId' }); // BAD_DATA
           }
           break;
         }
