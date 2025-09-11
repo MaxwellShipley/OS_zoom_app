@@ -11,7 +11,6 @@ import sys
 import threading
 import time
 from datetime import datetime
-from functools import partial
 
 import socketio  # python-socketio[client]
 import tkinter as tk
@@ -20,7 +19,7 @@ from tkinter import ttk
 # ─────────────────────────────────────────────────────────────
 # Config (hardcoded for now, per your preference)
 # ─────────────────────────────────────────────────────────────
-SERVER_URL = "http://localhost:3000"   # use your ngrok/host in prod
+SERVER_URL = "https://unduly-notable-llama.ngrok-free.app"   
 SEND_INTERVAL_SEC = 1.0                # 1 Hz
 
 # ─────────────────────────────────────────────────────────────
@@ -350,7 +349,9 @@ class App:
 
     # UI dispatcher
     def _ui(self, action, **kwargs):
-        self.root.after(0, partial(self._handle_ui, action, **kwargs))
+        def callit(a=action, kw=kwargs):
+            self._handle_ui(a, **kw)
+        self.root.after(0, callit)
 
     def _handle_ui(self, action, **kw):
         if action == "server_connected":
