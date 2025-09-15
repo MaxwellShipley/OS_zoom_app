@@ -7,258 +7,155 @@
 
 <style>
   :root{
-    /* Brand & surfaces */
+    /* Compact, professional light theme */
     --brand-1: #6a7dff;
     --brand-2: #9c6bff;
     --ok: #12b886;
     --text: #0f172a;
     --muted: #475569;
-    --glass: rgba(255,255,255,0.66);
-    --glass-border: rgba(255,255,255,0.30);
-    --ring: rgba(106,125,255,0.35);
-    --shadow: 0 8px 30px rgba(2, 6, 23, 0.16);
+    --border: rgba(15,23,42,.12);
+    --bg-1: #f5f7ff;
+    --bg-2: #ffffff;
 
-    --bg-grad-1: radial-gradient(1200px 700px at -10% -10%, #e5e7ff 0%, transparent 60%);
-    --bg-grad-2: radial-gradient(1200px 700px at 110% 110%, #ffe6ff 0%, transparent 60%);
-    --bg-grad-3: linear-gradient(135deg, #e8efff 0%, #f6f0ff 100%);
-  }
-  /* Dark theme tokens (toggled via .dark on html) */
-  html.dark{
-    --text: #e5e7eb;
-    --muted: #b6c2e0;
-    --glass: rgba(17,23,41,0.66);
-    --glass-border: rgba(255,255,255,0.12);
-    --ring: rgba(127,162,255,0.35);
-    --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --radius: 8px;
+    --shadow: 0 4px 18px rgba(2,6,23,.08);
+    --ring: rgba(106,125,255,0.28);
 
-    --bg-grad-1: radial-gradient(1200px 700px at -10% -10%, #13203e 0%, transparent 60%);
-    --bg-grad-2: radial-gradient(1200px 700px at 110% 110%, #2b183d 0%, transparent 60%);
-    --bg-grad-3: linear-gradient(135deg, #0e1728 0%, #171530 100%);
+    --icon-size: 22px;
+    --font-base: 13px;
+    --font-small: 12px;
   }
 
-  /* Background */
   html, body { height: 100%; }
   body{
     margin:0; color:var(--text);
-    background: var(--bg-grad-1), var(--bg-grad-2), var(--bg-grad-3);
+    background: radial-gradient(900px 500px at -10% -10%, #e9ecff 0%, transparent 60%),
+                radial-gradient(900px 500px at 110% 110%, #f6e8ff 0%, transparent 60%),
+                linear-gradient(135deg, #eef2ff 0%, #faf7ff 100%);
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+    font-size: var(--font-base);
     -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   }
 
-  .container{ max-width: 960px; padding: 28px; margin: 0 auto; }
+  .container{ max-width: 920px; padding: 20px; margin: 0 auto; }
 
   /* Topbar */
-  .topbar{ display:flex; align-items:center; justify-content:space-between; margin: 2px 0 12px 0; }
-  .brand{ display:flex; align-items:center; gap:10px; }
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    margin: 2px 0 10px 0;
+  }
   .brand-badge-rect{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 36px;
-    padding: 0 18px;
-    border-radius: 12px;
+    display:flex; align-items:center; justify-content:center;
+    height: 32px; padding: 0 14px; border-radius: var(--radius);
     background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+    color:#fff; font-weight:800; font-size: 14px; letter-spacing:.2px;
     box-shadow: var(--shadow);
-    font-weight: 800;
-    font-size: 16px;
-    color: white;
-    letter-spacing: .3px;
-    line-height: 1;
   }
-
-
-
-  .actions{ display:flex; align-items:center; gap:6px; }
-  .btn-toggle{
-    padding: 8px 12px; border-radius: 999px; cursor:pointer;
-    border: 1px solid var(--glass-border);
-    background: var(--glass);
-    color: var(--text);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    box-shadow: var(--shadow);
-    font-size: 13px;
+  .status{
+    font-size: var(--font-small);
+    padding: 3px 8px; border-radius: 999px; font-weight: 600;
+    border: 1px solid var(--border);
+    background: #fff;
   }
+  .status--connected{ color:#0b6e4f; border-color: rgba(18,184,134,.25); background: rgba(18,184,134,.10); }
+  .status--disconnected{ color:#b91c1c; border-color: rgba(239,68,68,.25); background: rgba(239,68,68,.10); }
 
-  /* Glass base */
+  /* Card / Glass */
   .glass{
-    background: var(--glass);
-    border: 1px solid var(--glass-border);
-    border-radius: 16px;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     box-shadow: var(--shadow);
   }
 
   /* Login card */
-  .login{ max-width: 540px; margin: 28px auto; padding: 24px; }
-  .login h2{ margin:0 0 8px 0; font-size:22px; }
-  .login p{ margin:0 0 16px 0; color: var(--muted); }
+  .login{ max-width: 520px; margin: 22px auto; padding: 18px; }
+  .login h2{ margin:0 0 6px 0; font-size: 18px; }
+  .login p{ margin:0 0 12px 0; color: var(--muted); font-size: var(--font-small); }
 
-  .field{ display:flex; flex-direction:column; gap:6px; margin: 10px 0 14px 0; }
-  .label{ font-size:13px; color: var(--muted); }
+  .field{ display:flex; flex-direction:column; gap:5px; margin: 8px 0 10px 0; }
+  .label{ font-size: var(--font-small); color: var(--muted); }
   .input{
-    padding: 12px; border-radius: 12px; outline:none;
-    border: 1px solid var(--glass-border); background: rgba(255,255,255,0.75);
+    padding: 10px; border-radius: var(--radius); outline:none;
+    border: 1px solid var(--border); background: #fff;
     transition: box-shadow .15s ease, border-color .15s ease, background .15s ease;
+    font-size: var(--font-base);
   }
-  html.dark .input{ background: rgba(15,23,42,0.66); }
-  .input:focus{ border-color: var(--brand-1); box-shadow: 0 0 0 4px var(--ring); }
+  .input:focus{ border-color: var(--brand-1); box-shadow: 0 0 0 3px var(--ring); }
 
-  .row{ display:flex; align-items:center; gap:10px; }
+  .row{ display:flex; align-items:center; gap:8px; }
   .btn{
-    border: none; cursor: pointer; padding: 12px 16px; border-radius: 12px;
+    border: none; cursor: pointer; padding: 10px 14px; border-radius: var(--radius);
     font-weight: 700; letter-spacing: .2px; color:white;
     background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
     box-shadow: var(--shadow);
+    font-size: var(--font-base);
   }
-  .status{
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-weight: 600;
-    letter-spacing: .2px;
-    border: 1px solid var(--glass-border);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-  }
-  .status--connected{
-    color: #0b6e4f;
-    background: rgba(18,184,134,.12);
-    border-color: rgba(18,184,134,.25);
-  }
-  .status--disconnected{
-    color: #b91c1c;
-    background: rgba(239,68,68,.12);
-    border-color: rgba(239,68,68,.25);
-  }
-  html.dark .status--connected{
-    color: #19d6a2;
-    background: rgba(25,214,162,.12);
-    border-color: rgba(25,214,162,.3);
-  }
-  html.dark .status--disconnected{
-    color: #fda4a4;
-    background: rgba(239,68,68,.14);
-    border-color: rgba(239,68,68,.28);
+  .btn.secondary{
+    background: #7381a7;
   }
 
+  /* Panel */
+  .panel{ padding: 14px; }
+  .panel-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; }
+  .panel-title{ font-size: 16px; font-weight: 800; }
+  .meta{ font-size: var(--font-small); color: var(--muted); }
 
-  /* Panels */
-  .panel{ padding: 20px; }
-  .panel-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; }
-  .panel-title{ font-size: 14px; font-weight: 800; }
-  .meta{ font-size: 12px; color: var(--muted); }
-
-  .list{ display:flex; flex-direction:column; gap:10px; }
+  /* Participant list */
+  .list{ display:flex; flex-direction:column; gap:8px; }
   .row-item{
-    display:flex; align-items:center; justify-content:space-between;
-    padding: 14px 16px; border-radius: 14px;
-    border: 1px solid var(--glass-border);
-    background: rgba(255,255,255,0.72);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    display:flex; flex-direction:column; gap:6px;
+    padding: 10px 12px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: #fff;
     transition: transform .1s ease, box-shadow .2s ease;
   }
-  html.dark .row-item{ background: rgba(17,23,41,0.66); }
   .row-item:hover{ transform: translateY(-1px); box-shadow: var(--shadow); }
 
-  .user{ display:flex; align-items:center; gap:10px; }
+  .row-top{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .user{
+    display:flex; align-items:center; gap:8px;
+  }
   .name{ font-weight:700; }
   .you{
-    font-size: 12px; color: #0b6e4f; background: rgba(18,184,134,.12);
+    font-size: var(--font-small); color: #0b6e4f; background: rgba(18,184,134,.12);
     border: 1px solid rgba(18,184,134,.25);
-    padding: 2px 8px; border-radius: 999px;
-  }
-  html.dark .you{ color:#19d6a2; background: rgba(25,214,162,.12); border-color: rgba(25,214,162,.3); }
-
-  .userid{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    font-size: 12px; color: var(--muted);
-    padding: 3px 8px; border-radius: 999px; border: 1px dashed var(--glass-border);
+    padding: 1px 6px; border-radius: 999px;
   }
 
-  /* Pill base — two-layer background to avoid gradient/border seam lines */
-.prob{
-  --prob-start: #60a5fa;               /* default (overridden per tier) */
-  --prob-end-overlay: rgba(255,255,255,.92);
-
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 70px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 9999px;
-
-  /* Transparent border + border-box layer prevents the “hairline” artifact */
-  border: 1px solid transparent;
-  background:
-    linear-gradient(135deg, var(--prob-start), var(--prob-end-overlay)) padding-box,
-    linear-gradient(135deg, rgba(255,255,255,0.7), rgba(255,255,255,0.7)) border-box;
-  background-clip: padding-box, border-box;
-  box-shadow: none;                     /* remove inset to prevent ring lines */
-
-  font-weight: 800;
-  letter-spacing: .3px;
-  line-height: 1;
-  box-sizing: border-box;
-  text-align: right;
-}
-html.dark .prob{
-  /* Dark mode: stick to a solid fill to avoid any residual banding */
-  background: rgba(17,23,41,.66);
-  border: 1px solid var(--glass-border);
-  background-clip: border-box;
-}
-.prob > span{ display:inline-block; line-height:1; }
-
-
-
-
-  /* Probability color mapping */
-  /* More vibrant green/blue/red */
-  /* Vibrant tiers via CSS variable; avoid seams by using the two-layer background above */
-  .prob[data-v="high"]{
-    --prob-start: #34d399;   /* green */
-    color:#065f46;
-  }
-  .prob[data-v="med"]{
-    --prob-start: #60a5fa;   /* blue */
-    color:#1e3a8a;
-  }
-  .prob[data-v="low"]{
-    --prob-start: #f87171;   /* red */
-    color:#7f1d1d;
+  .status-icon{
+    width: var(--icon-size); height: var(--icon-size); object-fit: contain;
   }
 
-  /* Dark mode text colors for readability */
-  html.dark .prob[data-v="high"]{ color:#86efac; }
-  html.dark .prob[data-v="med"]{ color:#93c5fd; }
-  html.dark .prob[data-v="low"]{ color:#fca5a5; }
-
-  /* Make login inputs text white in dark mode */
-  html.dark input[type="text"],
-  html.dark input[type="password"] {
-    color: #fff;
+  .toggle{
+    font: inherit; background: none; border: none; cursor: pointer;
+    padding: 2px 4px; color: var(--muted);
   }
+  .toggle:focus{ outline: 2px solid var(--ring); outline-offset: 2px; }
+  .toggle .chev{ font-weight:800; }
 
-  html.dark input[type="text"],
-  html.dark input[type="password"],
-  html.dark input[type="email"] { color: #fff; }
-  html.dark input::placeholder { color: rgba(255,255,255,0.65); }
-
-  #emoji-toggle-btn:hover { filter: brightness(1.05); }
-  #emoji-toggle-btn:active { transform: translateY(1px); }
-  #emoji-toggle-btn:focus { outline: 2px solid rgba(124,58,237,.4); outline-offset: 2px; }
-
+  .expand{
+    display:none; padding-top: 6px; border-top: 1px dashed var(--border);
+  }
+  .expand.open{ display:block; }
+  .prob-line{
+    display:flex; align-items:baseline; gap:8px;
+    font-size: var(--font-base);
+    margin: 2px 0;
+  }
+  .prob-label{
+    width: 46px; color: var(--muted); text-align: left;  /* left-justified */
+    font-size: var(--font-small);
+  }
+  .prob-val{ font-weight: 800; }
 
   /* States */
-  .loading{ text-align:center; padding:20px; color:var(--muted); }
+  .loading{ text-align:center; padding:18px; color:var(--muted); font-size: var(--font-base); }
   .error{
     background: rgba(255, 0, 0, 0.08);
-    color: #a61b1b; padding: 15px; border: 1px solid rgba(255,0,0,.25);
-    border-radius: 10px; margin: 10px 0;
+    color: #a61b1b; padding: 12px; border: 1px solid rgba(255,0,0,.25);
+    border-radius: var(--radius); margin: 10px 0;
   }
 </style>
 </head>
@@ -266,16 +163,13 @@ html.dark .prob{
   <div class="container">
     <div class="topbar">
       <div class="brand-badge-rect">OriginStory</div>
-      <div class="actions">
-        <button id="themeToggle" class="btn-toggle" type="button">🌙 Dark</button>
-      </div>
+      <span id="connection-status" class="status status--disconnected">disconnected</span>
     </div>
 
-    <!-- App root where JS renders Login or Participants -->
     <div id="participant-list">
       <div class="loading">
-        <h2>Loading Zoom SDK…</h2>
-        <p>Please wait while we initialize the app.</p>
+        <h2 style="font-size:16px;margin:0 0 6px 0;">Loading Zoom SDK…</h2>
+        <p style="margin:0;">Please wait while we initialize the app.</p>
       </div>
     </div>
   </div>
@@ -284,21 +178,5 @@ html.dark .prob{
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://appssdk.zoom.us/sdk.min.js"></script>
   <script src="index.js"></script>
-
-  <script>
-    // Simple theme toggle (persist per session)
-    const btn = document.getElementById('themeToggle');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const saved = sessionStorage.getItem('os-theme');
-    if ((saved === 'dark') || (!saved && prefersDark)) {
-      document.documentElement.classList.add('dark');
-      btn.textContent = '☀️ Light';
-    }
-    btn.addEventListener('click', () => {
-      const isDark = document.documentElement.classList.toggle('dark');
-      btn.textContent = isDark ? '☀️ Light' : '🌙 Dark';
-      sessionStorage.setItem('os-theme', isDark ? 'dark' : 'light');
-    });
-  </script>
 </body>
 </html>

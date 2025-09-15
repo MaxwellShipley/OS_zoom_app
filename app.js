@@ -463,7 +463,7 @@ io.on('connection', (socket) => {
               meetingId,
               userId: originStoryUserId,
               userName: target.userName,
-              authentication: prob_1, // backward-compat
+              authentication: prob_1, 
               prob_1,
               prob_2,
               timestamp: nowIso
