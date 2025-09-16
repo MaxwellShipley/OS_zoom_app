@@ -44,12 +44,13 @@
     display:flex; align-items:center; justify-content:space-between;
     margin: 2px 0 10px 0;
   }
-  .brand-badge-rect{
-    display:flex; align-items:center; justify-content:center;
-    height: 32px; padding: 0 14px; border-radius: var(--radius);
-    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
-    color:#fff; font-weight:800; font-size: 14px; letter-spacing:.2px;
-    box-shadow: var(--shadow);
+  .brand{
+    display:flex; align-items:center; gap:10px;
+    text-decoration:none;
+  }
+  .brand-logo{
+    height:24px;        /* tweak 20–28px to taste */
+    width:auto; display:block;
   }
   .status{
     font-size: var(--font-small);
@@ -162,7 +163,9 @@
 <body>
   <div class="container">
     <div class="topbar">
-      <div class="brand-badge-rect">OriginStory</div>
+      <a class="brand" href="#" aria-label="OriginStory">
+        <img class="brand-logo" src="assets/logo.png" alt="OriginStory" />
+      </a>
       <span id="connection-status" class="status status--disconnected">disconnected</span>
     </div>
 
