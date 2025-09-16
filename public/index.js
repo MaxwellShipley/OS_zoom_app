@@ -480,7 +480,7 @@ function proceedToMeetingJoin() {
       // Announce in chat
       try {
         await window.zoomSdk.sendMessageToChat({
-          message: `${currentUserName} is using OriginStory to verify their identity. Download: https://example.com/download`
+          message: `${currentUserName} is using OriginStory to authenticate themselves as human. Download: https://example.com/download`
         });
       } catch (e) {
         console.warn('sendMessageToChat failed (non-fatal):', e?.message || e);
