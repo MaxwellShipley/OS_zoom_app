@@ -7,177 +7,141 @@
 
 <style>
   :root{
-    /* Compact, professional light theme */
+    /* Brand & surfaces */
     --brand-1: #6a7dff;
     --brand-2: #9c6bff;
     --ok: #12b886;
     --text: #0f172a;
     --muted: #475569;
-    --border: rgba(15,23,42,.12);
-    --bg-1: #f5f7ff;
-    --bg-2: #ffffff;
+    --glass: rgba(255,255,255,0.66);
+    --glass-border: rgba(0,0,0,0.12);
+    --ring: rgba(106,125,255,0.35);
+    --shadow: 0 8px 24px rgba(2, 6, 23, 0.12);
 
-    --radius: 8px;
-    --shadow: 0 4px 18px rgba(2,6,23,.08);
-    --ring: rgba(106,125,255,0.28);
+    --bg-grad-1: radial-gradient(1200px 700px at -10% -10%, #e5e7ff 0%, transparent 60%);
+    --bg-grad-2: radial-gradient(1200px 700px at 110% 110%, #ffe6ff 0%, transparent 60%);
+    --bg-grad-3: linear-gradient(135deg, #e8efff 0%, #f6f0ff 100%);
 
-    --icon-size: 22px;
-    --font-base: 13px;
-    --font-small: 12px;
+    /* List icon controls (you can change these) */
+    --list-icon-size: 20px;
+    --list-icon-offset-y: 0px; /* positive = move down, negative = up */
   }
 
   html, body { height: 100%; }
   body{
     margin:0; color:var(--text);
-    background: radial-gradient(900px 500px at -10% -10%, #e9ecff 0%, transparent 60%),
-                radial-gradient(900px 500px at 110% 110%, #f6e8ff 0%, transparent 60%),
-                linear-gradient(135deg, #eef2ff 0%, #faf7ff 100%);
+    background: var(--bg-grad-1), var(--bg-grad-2), var(--bg-grad-3);
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
-    font-size: var(--font-base);
     -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    font-size: 14px;
   }
 
-  .container{ max-width: 920px; padding: 20px; margin: 0 auto; }
+  .container{ max-width: 960px; padding: 24px; margin: 0 auto; }
 
   /* Topbar */
-  .topbar{
-    display:flex; align-items:center; justify-content:space-between;
-    margin: 2px 0 10px 0;
-  }
-  .brand{
-    display:flex; align-items:center; gap:10px;
-    text-decoration:none;
-  }
-  .brand-logo{
-    height:24px;        /* tweak 20–28px to taste */
-    width:auto; display:block;
+  .topbar{ display:flex; align-items:center; justify-content:space-between; margin: 2px 0 12px 0; }
+  .brand-badge-rect{
+    display:flex; align-items:center; justify-content:center;
+    height: 32px; padding: 0 14px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+    box-shadow: var(--shadow); font-weight: 800; font-size: 14px; color: #fff; letter-spacing:.2px;
   }
   .status{
-    font-size: var(--font-small);
-    padding: 3px 8px; border-radius: 999px; font-weight: 600;
-    border: 1px solid var(--border);
-    background: #fff;
+    font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 600; letter-spacing:.2px;
+    border: 1px solid var(--glass-border); background: rgba(255,255,255,0.8);
   }
-  .status--connected{ color:#0b6e4f; border-color: rgba(18,184,134,.25); background: rgba(18,184,134,.10); }
-  .status--disconnected{ color:#b91c1c; border-color: rgba(239,68,68,.25); background: rgba(239,68,68,.10); }
+  .status--connected{
+    color: #0b6e4f; background: rgba(18,184,134,.12); border-color: rgba(18,184,134,.25);
+  }
+  .status--disconnected{
+    color: #b91c1c; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.25);
+  }
 
-  /* Card / Glass */
+  /* Glass card */
   .glass{
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    background: var(--glass); border: 1px solid var(--glass-border); border-radius: 12px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: var(--shadow);
   }
 
   /* Login card */
-  .login{ max-width: 520px; margin: 22px auto; padding: 18px; }
-  .login h2{ margin:0 0 6px 0; font-size: 18px; }
-  .login p{ margin:0 0 12px 0; color: var(--muted); font-size: var(--font-small); }
+  .login{ max-width: 520px; margin: 20px auto; padding: 18px; }
+  .login h2{ margin:0 0 6px 0; font-size:18px; }
+  .login p{ margin:0 0 12px 0; color: var(--muted); }
 
-  .field{ display:flex; flex-direction:column; gap:5px; margin: 8px 0 10px 0; }
-  .label{ font-size: var(--font-small); color: var(--muted); }
+  .field{ display:flex; flex-direction:column; gap:6px; margin: 8px 0 12px 0; }
+  .label{ font-size:12px; color: var(--muted); }
   .input{
-    padding: 10px; border-radius: var(--radius); outline:none;
-    border: 1px solid var(--border); background: #fff;
+    padding: 10px; border-radius: 8px; outline:none;
+    border: 1px solid var(--glass-border); background: rgba(255,255,255,0.9);
     transition: box-shadow .15s ease, border-color .15s ease, background .15s ease;
-    font-size: var(--font-base);
   }
-  .input:focus{ border-color: var(--brand-1); box-shadow: 0 0 0 3px var(--ring); }
+  .input:focus{ border-color: var(--brand-1); box-shadow: 0 0 0 4px var(--ring); }
 
   .row{ display:flex; align-items:center; gap:8px; }
   .btn{
-    border: none; cursor: pointer; padding: 10px 14px; border-radius: var(--radius);
-    font-weight: 700; letter-spacing: .2px; color:white;
-    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
-    box-shadow: var(--shadow);
-    font-size: var(--font-base);
-  }
-  .btn.secondary{
-    background: #7381a7;
+    border:none; cursor:pointer; padding: 10px 14px; border-radius: 8px; font-weight:700; letter-spacing:.2px; color:white;
+    background: linear-gradient(135deg, var(--brand-1), var(--brand-2)); box-shadow: var(--shadow);
   }
 
-  /* Panel */
+  /* Panel/Participants */
   .panel{ padding: 14px; }
   .panel-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; }
-  .panel-title{ font-size: 16px; font-weight: 800; }
-  .meta{ font-size: var(--font-small); color: var(--muted); }
+  .panel-title{ font-size: 14px; font-weight: 800; }
 
-  /* Participant list */
-  .list{ display:flex; flex-direction:column; gap:8px; }
   .row-item{
-    display:flex; flex-direction:column; gap:6px;
-    padding: 10px 12px; border-radius: var(--radius);
-    border: 1px solid var(--border); background: #fff;
-    transition: transform .1s ease, box-shadow .2s ease;
+    display:block; padding: 12px 12px; border-radius: 10px; border: 1px solid var(--glass-border);
+    background: rgba(255,255,255,0.9); transition: transform .1s ease, box-shadow .2s ease; margin-bottom:8px;
   }
   .row-item:hover{ transform: translateY(-1px); box-shadow: var(--shadow); }
 
-  .row-top{
-    display:flex; align-items:center; justify-content:space-between; gap:10px;
-  }
-  .user{
-    display:flex; align-items:center; gap:8px;
-  }
+  .row-main{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .user{ display:flex; align-items:center; gap:8px; }
   .name{ font-weight:700; }
+  .name--shadow{ text-shadow: 0 1px 0 rgba(0,0,0,0.12); }
   .you{
-    font-size: var(--font-small); color: #0b6e4f; background: rgba(18,184,134,.12);
-    border: 1px solid rgba(18,184,134,.25);
-    padding: 1px 6px; border-radius: 999px;
+    font-size: 11px; color: #0b6e4f; background: rgba(18,184,134,.12);
+    border: 1px solid rgba(18,184,134,.25); padding: 2px 6px; border-radius: 999px;
   }
 
+  .participant-right{ display:flex; align-items:center; gap:8px; }
   .status-icon{
-    width: var(--icon-size); height: var(--icon-size); object-fit: contain;
+    width:60px; height: 20px;
+    transform: translateX(-15px);
+    image-rendering: -webkit-optimize-contrast;
+  }
+  .chev{
+    border:none; background:transparent; cursor:pointer; font-size:14px; line-height:1; padding:0 2px; color:#334155;
   }
 
-  .toggle{
-    font: inherit; background: none; border: none; cursor: pointer;
-    padding: 2px 4px; color: var(--muted);
-  }
-  .toggle:focus{ outline: 2px solid var(--ring); outline-offset: 2px; }
-  .toggle .chev{ font-weight:800; }
+  .details{ margin-top: 8px; }
+  .details-sep{ border-top: 1px dashed var(--glass-border); margin: 8px 0 10px 0; }
+  .detail-row{ display:flex; align-items:center; justify-content:flex-start; gap:10px; margin: 6px 0; }
+  .detail-label{ width:150px; font-weight:600; color:#475569; text-align:left; }
+  .detail-value{ text-align:left; }
 
-  .expand{
-    display:none; padding-top: 6px; border-top: 1px dashed var(--border);
-  }
-  .expand.open{ display:block; }
-  .prob-line{
-    display:flex; align-items:baseline; gap:8px;
-    font-size: var(--font-base);
-    margin: 2px 0;
-  }
-  .prob-label{
-    width: 46px; color: var(--muted); text-align: left;  /* left-justified */
-    font-size: var(--font-small);
-  }
-  .prob-val{ font-weight: 800; }
-
-  /* States */
-  .loading{ text-align:center; padding:18px; color:var(--muted); font-size: var(--font-base); }
+  .loading{ text-align:center; padding:20px; color:var(--muted); }
   .error{
     background: rgba(255, 0, 0, 0.08);
     color: #a61b1b; padding: 12px; border: 1px solid rgba(255,0,0,.25);
-    border-radius: var(--radius); margin: 10px 0;
+    border-radius: 8px; margin: 10px 0;
   }
 </style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <a class="brand" href="#" aria-label="OriginStory">
-        <img class="brand-logo" src="assets/logo.png" alt="OriginStory" />
-      </a>
+      <div class="brand-badge-rect">OriginStory</div>
       <span id="connection-status" class="status status--disconnected">disconnected</span>
     </div>
 
     <div id="participant-list">
       <div class="loading">
-        <h2 style="font-size:16px;margin:0 0 6px 0;">Loading Zoom SDK…</h2>
-        <p style="margin:0;">Please wait while we initialize the app.</p>
+        <h2 style="font-size:16px;">Loading Zoom SDK…</h2>
+        <p>Please wait while we initialize the app.</p>
       </div>
     </div>
   </div>
 
-  <!-- Socket.IO, Zoom SDK, and your app -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://appssdk.zoom.us/sdk.min.js"></script>
   <script src="index.js"></script>
